@@ -19,6 +19,8 @@ bool IsPaired = false;
 int Send_gap_ms = 0;
 void *RecvData;
 
+void EspNowInit();
+
 uint8_t CHANNEL; // 通讯频道
 
 // 返回mac地址字符串
@@ -37,30 +39,43 @@ void onRecvCb(const uint8_t *mac, const uint8_t *incomingData, int len)
   {
     esp_err_t a = esp_now_send(peerInfo.peer_addr, incomingData, len);
     ESP_LOGI("Radio", "Controller mac : %s, Send data %s",
-             parseMac(mac), a == ESP_OK ? "success" : " fail");
+             parseMac(mac).c_str(), a == ESP_OK ? "success" : " fail");
   }
   else // if not pair
   {
+    ESP_LOGI(TAG, "to pair");
+
+    memset(&peerInfo, 0, sizeof(peerInfo)); // 清空对象
+    char macStr[18];
+    snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    memcpy(peerInfo.peer_addr, mac, 6);
+
     if (esp_now_add_peer(&peerInfo) == ESP_OK) // 配对
     {
+      ESP_LOGI(TAG, "to pairing ...");
       // 记录主机mac地址后向主机发送配对信息
       WiFi.mode(WIFI_STA);
       esp_err_t result = esp_now_send(mac,
                                       (const uint8_t *)WiFi.softAPSSID().c_str(), sizeof((const uint8_t *)WiFi.softAPSSID().c_str()));
-      Serial.print("Send Status: ");
+
       if (result == ESP_OK)
       {
-        Serial.println("send ok");
-        esp_now_unregister_recv_cb() == ESP_OK ? Serial.println("unreg peer ok") : Serial.println("unreg peer fail");
+        ESP_LOGI(TAG, "send ok");
+        IsPaired = true;
       }
       else
       {
-        Serial.println("Send fail");
+        ESP_LOGI(TAG, "Send fail");
+        ESP_LOGE(TAG, "Peer fail");
+        EspNowInit();
       }
     }
     else
     {
-      Serial.println("Peer fail");
+      ESP_LOGE(TAG, "Peer fail");
+      EspNowInit();
     }
   }
 }
@@ -70,6 +85,7 @@ void EspNowInit()
 
   // wifi set
   WiFi.mode(WIFI_AP);
+  esp_wifi_set_channel(CHANNEL, WIFI_SECOND_CHAN_NONE);
 
   if (WiFi.softAP(SSID, PASSWORD, CHANNEL, 0))
   {
@@ -80,7 +96,6 @@ void EspNowInit()
   {
     ESP_LOGE(TAG, "AP Config failed.");
   }
-  // esp_wifi_set_channel(CHANNEL, WIFI_SECOND_CHAN_NONE);
 
   // esp_now_set
   static int counter = 0;
