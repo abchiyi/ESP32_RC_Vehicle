@@ -19,7 +19,7 @@ bool IsPaired = false;
 int Send_gap_ms = 0;
 void *RecvData;
 
-int *CHANNEL; // 通讯频道
+uint8_t CHANNEL; // 通讯频道
 
 // 返回mac地址字符串
 String parseMac(const uint8_t *mac)
@@ -70,18 +70,17 @@ void EspNowInit()
 
   // wifi set
   WiFi.mode(WIFI_AP);
-  esp_wifi_set_channel(*CHANNEL, WIFI_SECOND_CHAN_NONE);
 
-  if (WiFi.softAP(SSID, PASSWORD, *CHANNEL, 0))
+  if (WiFi.softAP(SSID, PASSWORD, CHANNEL, 0))
   {
-    ESP_LOGI(TAG, "AP Config Success. Broadcasting with AP %s", String(SSID).c_str());
-    ESP_LOGI(TAG, "AP soft mac : %s, Channel : %u", WiFi.softAPmacAddress(), WiFi.channel());
-    esp_now_register_recv_cb(onRecvCb);
+    ESP_LOGI(TAG, "AP Config Success. Broadcasting with AP: %s", String(SSID).c_str());
+    ESP_LOGI(TAG, "AP soft mac : %s, Channel : %u", WiFi.softAPmacAddress().c_str(), WiFi.channel());
   }
   else
   {
-    Serial.println("AP Config failed.");
+    ESP_LOGE(TAG, "AP Config failed.");
   }
+  // esp_wifi_set_channel(CHANNEL, WIFI_SECOND_CHAN_NONE);
 
   // esp_now_set
   static int counter = 0;
@@ -112,7 +111,7 @@ void EspNowInit()
 void Radio::begin(const char *ssid, uint8_t channel)
 {
   controller = &peerInfo; // 设置配对对象
-  Channel = channel;
-  CHANNEL = (int *)&Channel;
-  esp_now_init();
+  CHANNEL = channel;
+  Channel = &CHANNEL;
+  EspNowInit();
 }
