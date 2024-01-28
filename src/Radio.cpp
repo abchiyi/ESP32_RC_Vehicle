@@ -19,6 +19,10 @@ bool IsPaired = false;
 int Send_gap_ms = 0;
 void *RecvData;
 
+// 连接超时控制器
+TimerHandle_t ConnectTimeoutTimer;
+const int ConnectTimeoutTimerID = 0;
+
 void EspNowInit();
 
 uint8_t CHANNEL; // 通讯频道
@@ -78,10 +82,15 @@ void onRecvCb(const uint8_t *mac, const uint8_t *incomingData, int len)
       EspNowInit();
     }
   }
+
+  // 启动定时器，在计时器结束前接收到返回信号则立即重置定时器
+  xTimerStart(ConnectTimeoutTimer, 100);
 }
 
 void EspNowInit()
 {
+
+  IsPaired = false; // re set flage
 
   // wifi set
   WiFi.mode(WIFI_AP);
@@ -120,6 +129,13 @@ void EspNowInit()
   }
 }
 
+// 连接超时控制器回调
+void IfTimeoutCB(TimerHandle_t xTimer)
+{
+  ESP_LOGW(TAG, "Connect time out, reset to pair");
+  EspNowInit();
+}
+
 /**
  * @brief 启动 esp_now 通讯
  */
@@ -128,5 +144,13 @@ void Radio::begin(const char *ssid, uint8_t channel)
   controller = &peerInfo; // 设置配对对象
   CHANNEL = channel;
   Channel = &CHANNEL;
+  // 定义连接超时控制器
+  ConnectTimeoutTimer = xTimerCreate(
+      "Connect time out",             // 定时器任务名称
+      1500,                           // 延迟多少tick后执行回调函数
+      pdFALSE,                        // 执行一次 pdTRUE 循环执行
+      (void *)&ConnectTimeoutTimerID, // 任务id
+      IfTimeoutCB                     // 回调函数
+  );
   EspNowInit();
 }
