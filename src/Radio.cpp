@@ -13,15 +13,11 @@ esp_now_peer_info peerInfo;
 
 int CONNECT_TIMEOUT = 500;              // ms // 连接同步等待时间
 int ConnectedTimeOut = CONNECT_TIMEOUT; // ms
-const int MinSendGapMs = 8;
-bool PairRuning = false;
-bool IsPaired = false;
-int Send_gap_ms = 0;
-void *RecvData;
-
-const uint8_t *INCOMINGDATA;
-
-ControllerStatus controllerData;
+const int MinSendGapMs = 8;             // 最小发送间隔
+bool PairRuning = false;                // 配对任务状态
+bool IsPaired = false;                  // 配对状态
+int Send_gap_ms = MinSendGapMs;         // 发送间隔
+recv_cb_t RECVCB;                       // 接收回调
 
 // 连接超时控制器
 TimerHandle_t ConnectTimeoutTimer;
@@ -44,9 +40,8 @@ void onRecvCb(const uint8_t *mac, const uint8_t *incomingData, int len)
 {
   if (IsPaired)
   {
-    // 储存收到的数据
-    INCOMINGDATA = incomingData;
-    // ESP_LOGI(TAG, "trig L : %u", data.trigLT);
+    // 执行接收回调
+    RECVCB(incomingData);
 
     // 利用主机发送间隔向主机返回数据
     esp_err_t a = esp_now_send(peerInfo.peer_addr, incomingData, len);
@@ -146,24 +141,19 @@ void IfTimeoutCB(TimerHandle_t xTimer)
 }
 
 // 启动 esp_now 通讯
-void Radio::begin(const char *ssid, uint8_t channel)
+void Radio::begin(const char *ssid, uint8_t channel, recv_cb_t recvCB)
 {
   master = &peerInfo; // 设置配对对象
   CHANNEL = channel;
   Channel = &CHANNEL;
+  RECVCB = recvCB;
   // 定义连接超时控制器
   ConnectTimeoutTimer = xTimerCreate(
       "Connect time out",             // 定时器任务名称
       1500,                           // 延迟多少tick后执行回调函数
-      pdFALSE,                        // 执行一次 pdTRUE 循环执行
+      pdFALSE,                        // 执行一次,pdTRUE 循环执行
       (void *)&ConnectTimeoutTimerID, // 任务id
       IfTimeoutCB                     // 回调函数
   );
   EspNowInit();
-}
-
-ControllerStatus Radio::controller()
-{
-  memcpy(&controllerData, INCOMINGDATA, sizeof(controllerData));
-  return controllerData;
 }
