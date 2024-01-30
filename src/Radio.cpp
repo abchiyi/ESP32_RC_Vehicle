@@ -19,6 +19,10 @@ bool IsPaired = false;
 int Send_gap_ms = 0;
 void *RecvData;
 
+const uint8_t *INCOMINGDATA;
+
+ControllerStatus controllerData;
+
 // 连接超时控制器
 TimerHandle_t ConnectTimeoutTimer;
 const int ConnectTimeoutTimerID = 0;
@@ -40,13 +44,14 @@ void onRecvCb(const uint8_t *mac, const uint8_t *incomingData, int len)
 {
   if (IsPaired)
   {
-    // 处理即接收到的数据
-    // memcpy(&myData, incomingData, sizeof(myData));
+    // 储存收到的数据
+    INCOMINGDATA = incomingData;
+    // ESP_LOGI(TAG, "trig L : %u", data.trigLT);
 
     // 利用主机发送间隔向主机返回数据
     esp_err_t a = esp_now_send(peerInfo.peer_addr, incomingData, len);
-    ESP_LOGI("Radio", "Controller mac : %s, Send data %s",
-             parseMac(mac).c_str(), a == ESP_OK ? "success" : " fail");
+    // ESP_LOGI("Radio", "Controller mac : %s, Send data %s",
+    //          parseMac(mac).c_str(), a == ESP_OK ? "success" : " fail");
   }
   else // if not pair
   {
@@ -143,7 +148,7 @@ void IfTimeoutCB(TimerHandle_t xTimer)
 // 启动 esp_now 通讯
 void Radio::begin(const char *ssid, uint8_t channel)
 {
-  controller = &peerInfo; // 设置配对对象
+  master = &peerInfo; // 设置配对对象
   CHANNEL = channel;
   Channel = &CHANNEL;
   // 定义连接超时控制器
@@ -155,4 +160,10 @@ void Radio::begin(const char *ssid, uint8_t channel)
       IfTimeoutCB                     // 回调函数
   );
   EspNowInit();
+}
+
+ControllerStatus Radio::controller()
+{
+  memcpy(&controllerData, INCOMINGDATA, sizeof(controllerData));
+  return controllerData;
 }
