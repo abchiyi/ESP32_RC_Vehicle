@@ -22,10 +22,9 @@ void *RecvData;
 // 连接超时控制器
 TimerHandle_t ConnectTimeoutTimer;
 const int ConnectTimeoutTimerID = 0;
+uint8_t CHANNEL; // 通讯频道
 
 void EspNowInit();
-
-uint8_t CHANNEL; // 通讯频道
 
 // 返回mac地址字符串
 String parseMac(const uint8_t *mac)
@@ -41,6 +40,10 @@ void onRecvCb(const uint8_t *mac, const uint8_t *incomingData, int len)
 {
   if (IsPaired)
   {
+    // 处理即接收到的数据
+    // memcpy(&myData, incomingData, sizeof(myData));
+
+    // 利用主机发送间隔向主机返回数据
     esp_err_t a = esp_now_send(peerInfo.peer_addr, incomingData, len);
     ESP_LOGI("Radio", "Controller mac : %s, Send data %s",
              parseMac(mac).c_str(), a == ESP_OK ? "success" : " fail");
@@ -66,19 +69,19 @@ void onRecvCb(const uint8_t *mac, const uint8_t *incomingData, int len)
 
       if (result == ESP_OK)
       {
-        ESP_LOGI(TAG, "send ok");
+        ESP_LOGI(TAG, "Pair Success");
         IsPaired = true;
       }
       else
       {
         ESP_LOGI(TAG, "Send fail");
-        ESP_LOGE(TAG, "Peer fail");
+        ESP_LOGE(TAG, "Pair fail, rest radio");
         EspNowInit();
       }
     }
     else
     {
-      ESP_LOGE(TAG, "Peer fail");
+      ESP_LOGE(TAG, "Pair fail, rest radio");
       EspNowInit();
     }
   }
@@ -87,6 +90,7 @@ void onRecvCb(const uint8_t *mac, const uint8_t *incomingData, int len)
   xTimerStart(ConnectTimeoutTimer, 100);
 }
 
+// 初始化 espNow
 void EspNowInit()
 {
 
@@ -136,9 +140,7 @@ void IfTimeoutCB(TimerHandle_t xTimer)
   EspNowInit();
 }
 
-/**
- * @brief 启动 esp_now 通讯
- */
+// 启动 esp_now 通讯
 void Radio::begin(const char *ssid, uint8_t channel)
 {
   controller = &peerInfo; // 设置配对对象
