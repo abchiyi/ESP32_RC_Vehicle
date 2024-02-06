@@ -15,7 +15,7 @@ int CONNECT_TIMEOUT = 500;              // ms // 连接同步等待时间
 int ConnectedTimeOut = CONNECT_TIMEOUT; // ms
 const int MinSendGapMs = 8;             // 最小发送间隔
 bool PairRuning = false;                // 配对任务状态
-bool IsPaired = false;                  // 配对状态
+bool *Connected;                        // 配对状态
 int Send_gap_ms = MinSendGapMs;         // 发送间隔
 recv_cb_t RECVCB;                       // 接收回调
 
@@ -38,7 +38,7 @@ String parseMac(const uint8_t *mac)
 // 接收回调，在这里执行配对程序&接收数据/发送数据
 void onRecvCb(const uint8_t *mac, const uint8_t *incomingData, int len)
 {
-  if (IsPaired)
+  if (*Connected)
   {
     // 执行接收回调
     RECVCB(incomingData);
@@ -70,7 +70,7 @@ void onRecvCb(const uint8_t *mac, const uint8_t *incomingData, int len)
       if (result == ESP_OK)
       {
         ESP_LOGI(TAG, "Pair Success");
-        IsPaired = true;
+        *Connected = true;
       }
       else
       {
@@ -94,7 +94,7 @@ void onRecvCb(const uint8_t *mac, const uint8_t *incomingData, int len)
 void EspNowInit()
 {
 
-  IsPaired = false; // re set flage
+  *Connected = false; // re set flage
 
   // wifi set
   WiFi.mode(WIFI_AP);
@@ -144,6 +144,7 @@ void IfTimeoutCB(TimerHandle_t xTimer)
 void Radio::begin(const char *ssid, uint8_t channel, recv_cb_t recvCB)
 {
   master = &peerInfo; // 设置配对对象
+  Connected = &connected;
   CHANNEL = channel;
   Channel = &CHANNEL;
   RECVCB = recvCB;

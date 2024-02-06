@@ -1,15 +1,20 @@
 #include <ESP32Servo.h>
 #include <vehicle.h>
+#include <esp_log.h>
+
+#define TAG "vehicle"
 
 Servo TurnServo;
+bool *ControllerConnected; // 连接状态
 
 // 定义控制 Pin
-#define PIN_MOVE 17    // 移动控制
-#define PIN_MOVE_R 16  // 倒车控制
-#define CHANNEL_MOVE 4 // 马达驱动 pwm 通道
-#define PIN_TURN 18    // 转向控制
+#define PIN_MOVE_F 17    // 前进控制
+#define PIN_MOVE_R 16    // 倒车控制
+#define CHANNEL_MOVE_F 4 // 马达驱动 pwm 通道
+#define CHANNEL_MOVE_R 5 // 马达驱动 pwm 通道
+#define PIN_TURN 18      // 转向控制
 
-#define PIN_HEADLIGHT 13       // 大灯
+#define PIN_HEADLIGHT 19       // 大灯
 #define PIN_STOPLIGHT 27       // 刹车灯
 #define PIN_STATUSLIGHT 23     // 状态灯
 #define PIN_REVERSING_LIGHT 26 // 倒车灯
@@ -34,6 +39,14 @@ bool BRAKE = false;         // 刹车
 bool LightTurnL = false;    // 左转灯
 bool LightTurnR = false;    // 右转灯
 bool HazardLight = false;   // 危险报警灯
+
+ControllerStatus Controller;
+
+// 回调函数，处理radio接收到的数据
+void updateRecvCB(const uint8_t *incomingData)
+{
+  memcpy(&Controller, incomingData, sizeof(Controller));
+}
 
 /* 设置 pwm 输出引脚 */
 void setPWMPin(int pin, int pwmChannel)
@@ -79,55 +92,57 @@ void TaskMove(void *pt)
     BRAKE = LT && RT;                    // 两个扳机键同时按下开启刹车
     REVERSING_LIGHT = HOLD_LT ? 150 : 0; // 倒车灯
 
-    if (BRAKE) // 刹车激活时对电机施加一个较小的反向电压
+    if (BRAKE) // 马达制动
     {
-      digitalWrite(PIN_MOVE_R, HOLD_RT);
-      ledcWrite(CHANNEL_MOVE, 20);
+      ledcWrite(CHANNEL_MOVE_F, 255);
+      ledcWrite(CHANNEL_MOVE_R, 255);
     }
     else
     {
-      int value = round((HOLD_RT ? RT : LT) / 4);
-      digitalWrite(PIN_MOVE_R, (bool)REVERSING_LIGHT); // R/F
-      ledcWrite(CHANNEL_MOVE, value);                  // motor
+      if (HOLD_RT)
+      {
+        ledcWrite(CHANNEL_MOVE_F, (int)(RT / 4));
+        ledcWrite(CHANNEL_MOVE_R, 0);
+      }
+      else if (HOLD_LT)
+      {
+        ledcWrite(CHANNEL_MOVE_R, (int)(LT / 4));
+        ledcWrite(CHANNEL_MOVE_F, 0);
+      }
+      else
+      {
+        ledcWrite(CHANNEL_MOVE_R, 0);
+        ledcWrite(CHANNEL_MOVE_F, 0);
+      }
     }
-
-    vTaskDelay(1);
   }
+
+  vTaskDelay(1);
 }
 
 // 转向任务
 void TaskTurn(void *pt)
 {
-  const int width = 65535;
-  const int deadZone = 4500;
-  const int LStart = width / 2 - deadZone / 2;
-  const int RStart = width / 2 + deadZone / 2;
+  const int width = 2048;
+  const int LStart = width / 2;
+  const int RStart = width / 2;
   const int JoyLength = 256;
+  const double step = 90.00 / 256.00;
 
+  // 输入值为 -2047 ~ 0 ~ 2047
   int joy = 0;
 
   while (true)
   {
     joy = Controller.joyLHori;
+    int v = (round((double)abs(joy) / (double)8) * step); // 计算转向角度
 
-    // joy 的值不在死区范围内时执行转向动作
-    if (joy <= LStart || joy >= RStart)
-    {
-      // 计算打杆量
-      int t_joy = joy <= LStart ? joy : joy - deadZone;
-      int value = round(double(t_joy) * (double(JoyLength) / double(LStart)));
+    int ang = joy < 0 ? 90 + v : joy > 0 ? 90 - v
+                                         : 90;
 
-      // 转换杆量为角度
-      double step = 90.000 / double(JoyLength);
-      int ang = 180 - value * step;
-
-      // 写入角度
-      TurnServo.write(ang);
-    }
-    else // 在死区内时回正
-    {
-      TurnServo.write(90);
-    }
+    // ang = 180 - ang; // 对输出结果取反
+    // ESP_LOGI(TAG, "Joy %d, ang %d", joy, ang);
+    TurnServo.write(ang);
 
     vTaskDelay(1);
   }
@@ -137,9 +152,9 @@ void TaskTurn(void *pt)
 void VehicleControlSetup()
 {
 
-  // 电调设置
-  pinMode(PIN_MOVE_R, OUTPUT);       // F/R
-  setPWMPin(PIN_MOVE, CHANNEL_MOVE); // motor
+  // DRV8833 输入设置
+  setPWMPin(PIN_MOVE_F, CHANNEL_MOVE_F); // input 1/3
+  setPWMPin(PIN_MOVE_R, CHANNEL_MOVE_R); // input 2/4
 
   // 设置舵机
   pinMode(PIN_TURN, OUTPUT);
@@ -177,7 +192,7 @@ void TaskLightControll(void *pt)
   while (true)
   {
     vTaskDelay(20);
-    if ((*DirUp || *DirDown || *BtnY) && Controller.connected)
+    if ((*DirUp || *DirDown || *BtnY) && *ControllerConnected)
     {
       if (!changed)
       {
@@ -243,43 +258,43 @@ void TaskLightControll(void *pt)
   }
 }
 
-// XXX 未完成 /* 状态灯任务 */
-// void TaskStatusLight(void *pt)
-// {
-//   int pwmChannel = CHANNEL_STATUSLIGHT;
-//   int resolution = 100;
-//   double step = (double)255 / (double)resolution;
-//   while (true)
-//   {
-//     if (XboxController::connected)
-//     {
-//       ledcWrite(pwmChannel, 255);
-//       vTaskDelay(100);
-//       ledcWrite(pwmChannel, 0);
-//       vTaskDelay(100);
-//       ledcWrite(pwmChannel, 255);
-//       vTaskDelay(100);
-//       ledcWrite(pwmChannel, 0);
-//       vTaskDelay(2000);
-//     }
-//     else
-//     {
-//       for (int i = 0; i <= 100; i = i + 5)
-//       {
-//         ledcWrite(pwmChannel, round((double)i * step));
-//         vTaskDelay(3);
-//       }
-//       vTaskDelay(100);
+/* 状态灯任务 */
+void TaskStatusLight(void *pt)
+{
+  int pwmChannel = CHANNEL_STATUSLIGHT;
+  int resolution = 100;
+  double step = (double)255 / (double)resolution;
+  while (true)
+  {
+    if (*ControllerConnected)
+    {
+      ledcWrite(pwmChannel, 255);
+      vTaskDelay(100);
+      ledcWrite(pwmChannel, 0);
+      vTaskDelay(100);
+      ledcWrite(pwmChannel, 255);
+      vTaskDelay(100);
+      ledcWrite(pwmChannel, 0);
+      vTaskDelay(2000);
+    }
+    else
+    {
+      for (int i = 0; i <= 100; i = i + 5)
+      {
+        ledcWrite(pwmChannel, round((double)i * step));
+        vTaskDelay(3);
+      }
+      vTaskDelay(100);
 
-//       for (int i = 100; i >= 0; i = i - 5)
-//       {
-//         ledcWrite(pwmChannel, round((double)i * step));
-//         vTaskDelay(3);
-//       }
-//       vTaskDelay(100);
-//     }
-//   }
-// }
+      for (int i = 100; i >= 0; i = i - 5)
+      {
+        ledcWrite(pwmChannel, round((double)i * step));
+        vTaskDelay(3);
+      }
+      vTaskDelay(100);
+    }
+  }
+}
 
 /* 转向灯任务 */
 void TaskIndicatorLight(void *pt)
@@ -381,8 +396,9 @@ void LightSetup()
   xTaskCreate(TaskIndicatorLightControl, "IndicatorLightControl", 1024, NULL, 3, NULL);
 }
 
-void Vehicle::begin()
+void Vehicle::begin(bool *connected)
 {
+  ControllerConnected = connected;
   LightSetup();
   VehicleControlSetup();
 }

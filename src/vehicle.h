@@ -12,17 +12,13 @@ struct ControllerStatus
   int16_t joyRHori;
   int16_t joyRVert;
   int16_t trigLT, trigRT;
-} Controller;
+};
 
-// 回调函数，处理radio接收到的数据
-void updateRecvCB(const uint8_t *incomingData)
-{
-  memcpy(&Controller, incomingData, sizeof(Controller));
-}
+void updateRecvCB(const uint8_t *incomingData);
 
 class Vehicle
 {
 private:
 public:
-  void begin();
+  void begin(bool *connected);
 };

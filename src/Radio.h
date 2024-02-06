@@ -8,9 +8,9 @@ typedef void (*recv_cb_t)(const uint8_t *incomingData);
 class Radio
 {
 private:
-  /* data */
 public:
   esp_now_peer_info *master; // 无线控制器的配对信息
+  bool connected = false;    // 配对状态
   uint8_t *Channel;          // 通讯频道
   void begin(const char *ssid, uint8_t channel, recv_cb_t recvCB);
 };
