@@ -390,7 +390,7 @@ void LightSetup()
   setPWMPin(PIN_REVERSING_LIGHT, CHANNEL_REVERSING_LIGHT);
 
   xTaskCreate(TaskLight, "TaskHeadlight", 1024, NULL, 3, NULL);
-  // xTaskCreate(TaskStatusLight, "TaskStatusLight", 1024, NULL, 3, NULL);
+  xTaskCreate(TaskStatusLight, "TaskStatusLight", 1024, NULL, 3, NULL);
   xTaskCreate(TaskLightControll, "TaskHeadlightControll", 1024, NULL, 3, NULL);
   xTaskCreate(TaskIndicatorLight, "Indicator Light", 1024, NULL, 3, NULL);
   xTaskCreate(TaskIndicatorLightControl, "IndicatorLightControl", 1024, NULL, 3, NULL);
