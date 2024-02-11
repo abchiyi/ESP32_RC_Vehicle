@@ -5,19 +5,19 @@
 #include <esp_log.h>
 
 #define TAG "Radio"
-// XXX 固定的配对设置
-#define SSID "Slave_2"
-#define PASSWORD "Slave_1_Password"
 
-esp_now_peer_info peerInfo;
+#define PASSWORD "--------"
 
 int CONNECT_TIMEOUT = 500;              // ms // 连接同步等待时间
 int ConnectedTimeOut = CONNECT_TIMEOUT; // ms
 const int MinSendGapMs = 8;             // 最小发送间隔
-bool PairRuning = false;                // 配对任务状态
-bool *Connected;                        // 配对状态
 int Send_gap_ms = MinSendGapMs;         // 发送间隔
-recv_cb_t RECVCB;                       // 接收回调
+
+esp_now_peer_info Radio::peerInfo;
+recv_cb_t Radio::RECVCB;
+const char *Radio::SSID;
+bool Radio::connected;
+int Radio::channel;
 
 // 连接超时控制器
 TimerHandle_t ConnectTimeoutTimer;
@@ -38,30 +38,28 @@ String parseMac(const uint8_t *mac)
 // 接收回调，在这里执行配对程序&接收数据/发送数据
 void onRecvCb(const uint8_t *mac, const uint8_t *incomingData, int len)
 {
-  if (*Connected)
+  if (Radio::connected)
   {
     // 执行接收回调
-    RECVCB(incomingData);
+    Radio::RECVCB(incomingData);
 
     // 利用主机发送间隔向主机返回数据
-    esp_err_t a = esp_now_send(peerInfo.peer_addr, incomingData, len);
-    // ESP_LOGI("Radio", "Controller mac : %s, Send data %s",
-    //          parseMac(mac).c_str(), a == ESP_OK ? "success" : " fail");
+    esp_err_t a = esp_now_send(Radio::peerInfo.peer_addr, incomingData, len);
   }
   else // if not pair
   {
     ESP_LOGI(TAG, "to pair");
 
-    memset(&peerInfo, 0, sizeof(peerInfo)); // 清空对象
+    memset(&Radio::peerInfo, 0, sizeof(Radio::peerInfo)); // 清空对象
     char macStr[18];
     snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-    memcpy(peerInfo.peer_addr, mac, 6);
+    memcpy(Radio::peerInfo.peer_addr, mac, 6);
 
-    if (esp_now_add_peer(&peerInfo) == ESP_OK) // 配对
+    if (esp_now_add_peer(&Radio::peerInfo) == ESP_OK) // 配对
     {
-      ESP_LOGI(TAG, "to pairing ...");
+      ESP_LOGI(TAG, "pairing...");
       // 记录主机mac地址后向主机发送配对信息
       WiFi.mode(WIFI_STA);
       esp_err_t result = esp_now_send(mac,
@@ -70,7 +68,7 @@ void onRecvCb(const uint8_t *mac, const uint8_t *incomingData, int len)
       if (result == ESP_OK)
       {
         ESP_LOGI(TAG, "Pair Success");
-        *Connected = true;
+        Radio::connected = true;
       }
       else
       {
@@ -87,22 +85,25 @@ void onRecvCb(const uint8_t *mac, const uint8_t *incomingData, int len)
   }
 
   // 启动定时器，在计时器结束前接收到返回信号则立即重置定时器
-  xTimerStart(ConnectTimeoutTimer, 100);
+  if (xTimerStart(ConnectTimeoutTimer, 100) != pdPASS)
+  {
+    ESP_LOGI(TAG, "start/reset timer fial");
+  }
 }
 
 // 初始化 espNow
 void EspNowInit()
 {
 
-  *Connected = false; // re set flage
+  Radio::connected = false; // re set flage
 
   // wifi set
   WiFi.mode(WIFI_AP);
-  esp_wifi_set_channel(CHANNEL, WIFI_SECOND_CHAN_NONE);
+  // esp_wifi_set_channel(CHANNEL, WIFI_SECOND_CHAN_NONE);
 
-  if (WiFi.softAP(SSID, PASSWORD, CHANNEL, 0))
+  if (WiFi.softAP(Radio::SSID, PASSWORD, CHANNEL, 0))
   {
-    ESP_LOGI(TAG, "AP Config Success. Broadcasting with AP: %s", String(SSID).c_str());
+    ESP_LOGI(TAG, "AP Config Success. Broadcasting with AP: %s", String(Radio::SSID).c_str());
     ESP_LOGI(TAG, "AP soft mac : %s, Channel : %u", WiFi.softAPmacAddress().c_str(), WiFi.channel());
   }
   else
@@ -140,21 +141,35 @@ void IfTimeoutCB(TimerHandle_t xTimer)
   EspNowInit();
 }
 
+void TaskRadioMainLoop(void *pt)
+{
+  while (true)
+  {
+    vTaskDelay(1);
+  }
+}
+
 // 启动 esp_now 通讯
 void Radio::begin(const char *ssid, uint8_t channel, recv_cb_t recvCB)
 {
-  master = &peerInfo; // 设置配对对象
-  Connected = &connected;
-  CHANNEL = channel;
-  Channel = &CHANNEL;
+
+  peerInfo = esp_now_peer_info();
+  connected = false;
+  channel = channel;
   RECVCB = recvCB;
+  SSID = ssid;
+
   // 定义连接超时控制器
   ConnectTimeoutTimer = xTimerCreate(
       "Connect time out",             // 定时器任务名称
-      1500,                           // 延迟多少tick后执行回调函数
+      500,                            // 延迟多少tick后执行回调函数
       pdFALSE,                        // 执行一次,pdTRUE 循环执行
       (void *)&ConnectTimeoutTimerID, // 任务id
       IfTimeoutCB                     // 回调函数
   );
+
+  delay(100);
   EspNowInit();
+
+  xTaskCreate(TaskRadioMainLoop, "TaskRadioMainLoop", 4096, NULL, 2, NULL);
 }

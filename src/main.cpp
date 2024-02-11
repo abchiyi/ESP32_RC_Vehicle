@@ -10,7 +10,6 @@
 
 Vehicle vehicle;
 Radio radio;
-
 void setup()
 {
   Serial.begin(115200);
