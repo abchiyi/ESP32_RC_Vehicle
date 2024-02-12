@@ -14,7 +14,8 @@ const int MinSendGapMs = 8;             // 最小发送间隔
 int Send_gap_ms = MinSendGapMs;         // 发送间隔
 
 esp_now_peer_info Radio::peerInfo;
-recv_cb_t Radio::RECVCB;
+sendData Radio::SendData;
+radio_cb_t Radio::RECVCB;
 const char *Radio::SSID;
 bool Radio::connected;
 int Radio::channel;
@@ -24,6 +25,7 @@ TimerHandle_t ConnectTimeoutTimer;
 const int ConnectTimeoutTimerID = 0;
 uint8_t CHANNEL; // 通讯频道
 
+void IfTimeoutCB(TimerHandle_t xTimer);
 void EspNowInit();
 
 // 返回mac地址字符串
@@ -44,7 +46,7 @@ void onRecvCb(const uint8_t *mac, const uint8_t *incomingData, int len)
     Radio::RECVCB(incomingData);
 
     // 利用主机发送间隔向主机返回数据
-    esp_err_t a = esp_now_send(Radio::peerInfo.peer_addr, incomingData, len);
+    esp_err_t a = esp_now_send(Radio::peerInfo.peer_addr, (uint8_t *)&Radio::SendData, sizeof(Radio::SendData));
   }
   else // if not pair
   {
@@ -87,8 +89,12 @@ void onRecvCb(const uint8_t *mac, const uint8_t *incomingData, int len)
   // 启动定时器，在计时器结束前接收到返回信号则立即重置定时器
   if (xTimerStart(ConnectTimeoutTimer, 100) != pdPASS)
   {
-    ESP_LOGI(TAG, "start/reset timer fial");
+    ESP_LOGE(TAG, "start/reset timer fial");
   }
+  // else
+  // {
+  //   ESP_LOGI(TAG, "start/reset timer success");
+  // }
 }
 
 // 初始化 espNow
@@ -97,7 +103,17 @@ void EspNowInit()
 
   Radio::connected = false; // re set flage
 
+  // 定义连接超时控制器
+  ConnectTimeoutTimer = xTimerCreate(
+      "Connect time out",             // 定时器任务名称
+      500,                            // 延迟多少tick后执行回调函数
+      pdFALSE,                        // 执行一次,pdTRUE 循环执行
+      (void *)&ConnectTimeoutTimerID, // 任务id
+      IfTimeoutCB                     // 回调函数
+  );
+
   // wifi set
+  delay(100);
   WiFi.mode(WIFI_AP);
   // esp_wifi_set_channel(CHANNEL, WIFI_SECOND_CHAN_NONE);
 
@@ -150,10 +166,8 @@ void TaskRadioMainLoop(void *pt)
 }
 
 // 启动 esp_now 通讯
-void Radio::begin(const char *ssid, uint8_t channel, recv_cb_t recvCB)
+void Radio::begin(const char *ssid, uint8_t channel, radio_cb_t recvCB)
 {
-
-  peerInfo = esp_now_peer_info();
   connected = false;
   channel = channel;
   RECVCB = recvCB;
@@ -168,7 +182,6 @@ void Radio::begin(const char *ssid, uint8_t channel, recv_cb_t recvCB)
       IfTimeoutCB                     // 回调函数
   );
 
-  delay(100);
   EspNowInit();
 
   xTaskCreate(TaskRadioMainLoop, "TaskRadioMainLoop", 4096, NULL, 2, NULL);
