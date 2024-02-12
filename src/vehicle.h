@@ -19,6 +19,13 @@ void updateRecvCB(const uint8_t *incomingData);
 class Vehicle
 {
 private:
+  bool HOLD_RT = false;
+  bool HOLD_LT = false;
+  bool changed = false;
+
 public:
+  static int ang;
+
   void begin(bool *connected);
+  void update();
 };

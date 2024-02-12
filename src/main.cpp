@@ -10,6 +10,7 @@
 
 Vehicle vehicle;
 Radio radio;
+
 void taskReadBatteryVolt(void *pt)
 {
   int analogVolts;
@@ -40,4 +41,5 @@ void setup()
 
 void loop()
 {
+  vehicle.update();
 }

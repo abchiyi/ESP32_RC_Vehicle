@@ -40,6 +40,10 @@ bool LightTurnL = false;    // 左转灯
 bool LightTurnR = false;    // 右转灯
 bool HazardLight = false;   // 危险报警灯
 
+const double angStep = 90.00 / 256.00; // 转向°步长
+
+int Vehicle::ang;
+
 ControllerStatus Controller;
 
 // 回调函数，处理radio接收到的数据
@@ -56,113 +60,78 @@ void setPWMPin(int pin, int pwmChannel)
   ledcAttachPin(pin, pwmChannel);
 }
 
-// 移动任务
-void TaskMove(void *pt)
+// 更新舵机转向角度
+void updateTurn()
 {
-  bool HOLD_RT = false;
-  bool HOLD_LT = false;
-  bool changed = false;
-
-  while (true)
-  {
-    int LT = Controller.trigLT;
-    int RT = Controller.trigRT;
-    // 确定前进方向;
-    if (LT || RT)
-    {
-      if (!changed)
-      {
-        HOLD_RT = (bool)RT;
-        HOLD_LT = !HOLD_RT ? (bool)LT : false;
-        changed = true;
-      }
-    }
-    else
-    {
-      HOLD_RT = false;
-      HOLD_LT = false;
-      changed = false;
-    }
-    // 当所控制按钮的值发生改变时，重设change以在下个循环重新计算前进方向
-    if (HOLD_LT != (bool)LT && HOLD_RT != (bool)RT)
-    {
-      changed = false;
-    }
-
-    BRAKE = LT && RT;                    // 两个扳机键同时按下开启刹车
-    REVERSING_LIGHT = HOLD_LT ? 150 : 0; // 倒车灯
-
-    if (BRAKE) // 马达制动
-    {
-      ledcWrite(CHANNEL_MOVE_F, 255);
-      ledcWrite(CHANNEL_MOVE_R, 255);
-    }
-    else
-    {
-      if (HOLD_RT)
-      {
-        ledcWrite(CHANNEL_MOVE_F, (int)(RT / 4));
-        ledcWrite(CHANNEL_MOVE_R, 0);
-      }
-      else if (HOLD_LT)
-      {
-        ledcWrite(CHANNEL_MOVE_R, (int)(LT / 4));
-        ledcWrite(CHANNEL_MOVE_F, 0);
-      }
-      else
-      {
-        ledcWrite(CHANNEL_MOVE_R, 0);
-        ledcWrite(CHANNEL_MOVE_F, 0);
-      }
-    }
-  }
-
-  vTaskDelay(1);
-}
-
-// 转向任务
-void TaskTurn(void *pt)
-{
-  const int width = 2048;
-  const int LStart = width / 2;
-  const int RStart = width / 2;
-  const int JoyLength = 256;
-  const double step = 90.00 / 256.00;
-
   // 输入值为 -2047 ~ 0 ~ 2047
-  int joy = 0;
+  int joy = Controller.joyLHori;
+  int v = (round((double)abs(joy) / (double)8) * angStep); // 计算转向角度
 
-  while (true)
-  {
-    joy = Controller.joyLHori;
-    int v = (round((double)abs(joy) / (double)8) * step); // 计算转向角度
+  Vehicle::ang = joy < 0 ? 90 + v : joy > 0 ? 90 - v
+                                            : 90;
 
-    int ang = joy < 0 ? 90 + v : joy > 0 ? 90 - v
-                                         : 90;
-
-    // ang = 180 - ang; // 对输出结果取反
-    // ESP_LOGI(TAG, "Joy %d, ang %d", joy, ang);
-    TurnServo.write(ang);
-
-    vTaskDelay(1);
-  }
+  // ang = 180 - ang; // 对输出结果取反
+  // ESP_LOGI(TAG, "Joy %d, ang %d", joy, ang);
+  TurnServo.write(Vehicle::ang);
 }
 
-/* 车辆操控设置 转向，移动 */
-void VehicleControlSetup()
+// 移动任务
+void TaskMove(
+    bool HOLD_RT,
+    bool HOLD_LT,
+    bool changed)
 {
 
-  // DRV8833 输入设置
-  setPWMPin(PIN_MOVE_F, CHANNEL_MOVE_F); // input 1/3
-  setPWMPin(PIN_MOVE_R, CHANNEL_MOVE_R); // input 2/4
+  int LT = Controller.trigLT;
+  int RT = Controller.trigRT;
+  // 确定前进方向;
+  if (LT || RT)
+  {
+    if (!changed)
+    {
+      HOLD_RT = (bool)RT;
+      HOLD_LT = !HOLD_RT ? (bool)LT : false;
+      changed = true;
+    }
+  }
+  else
+  {
+    HOLD_RT = false;
+    HOLD_LT = false;
+    changed = false;
+  }
+  // 当所控制按钮的值发生改变时，重设change以在下个循环重新计算前进方向
+  if (HOLD_LT != (bool)LT && HOLD_RT != (bool)RT)
+  {
+    changed = false;
+  }
 
-  // 设置舵机
-  pinMode(PIN_TURN, OUTPUT);
-  TurnServo.setPeriodHertz(50);
-  TurnServo.attach(PIN_TURN, 50, 2500);
+  BRAKE = LT && RT;                    // 两个扳机键同时按下开启刹车
+  REVERSING_LIGHT = HOLD_LT ? 150 : 0; // 倒车灯
 
-  xTaskCreate(TaskTurn, "Turn", 2048, NULL, 2, NULL);
-  xTaskCreate(TaskMove, "Move", 2048, NULL, 2, NULL);
+  if (BRAKE) // 马达制动
+  {
+    ledcWrite(CHANNEL_MOVE_F, 255);
+    ledcWrite(CHANNEL_MOVE_R, 255);
+  }
+  else
+  {
+    if (HOLD_RT)
+    {
+      ledcWrite(CHANNEL_MOVE_F, (int)(RT / 4));
+      ledcWrite(CHANNEL_MOVE_R, 0);
+    }
+    else if (HOLD_LT)
+    {
+      ledcWrite(CHANNEL_MOVE_R, (int)(LT / 4));
+      ledcWrite(CHANNEL_MOVE_F, 0);
+    }
+    else
+    {
+      ledcWrite(CHANNEL_MOVE_R, 0);
+      ledcWrite(CHANNEL_MOVE_F, 0);
+    }
+  }
 }
 
 /* 灯光任务 大灯，倒车灯，刹车灯*/
@@ -396,9 +365,26 @@ void LightSetup()
   xTaskCreate(TaskIndicatorLightControl, "IndicatorLightControl", 1024, NULL, 3, NULL);
 }
 
+// 将此函数放入主循环中
+void Vehicle::update()
+{
+  updateTurn();
+  TaskMove(HOLD_RT, HOLD_LT, changed);
+};
+
 void Vehicle::begin(bool *connected)
 {
   ControllerConnected = connected;
   LightSetup();
-  VehicleControlSetup();
+
+  // 设置电调
+  setPWMPin(PIN_MOVE_F, CHANNEL_MOVE_F); // input 1/3
+  setPWMPin(PIN_MOVE_R, CHANNEL_MOVE_R); // input 2/4
+
+  // 设置舵机
+  pinMode(PIN_TURN, OUTPUT);
+  TurnServo.setPeriodHertz(50);
+  TurnServo.attach(PIN_TURN, 50, 2500);
+
+  // xTaskCreate(TaskMove, "Move", 2048, NULL, 2, NULL);
 }

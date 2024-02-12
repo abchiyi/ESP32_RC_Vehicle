@@ -161,7 +161,7 @@ void TaskRadioMainLoop(void *pt)
 {
   while (true)
   {
-    vTaskDelay(1);
+    vTaskDelay(5);
   }
 }
 
@@ -177,7 +177,7 @@ void Radio::begin(const char *ssid, uint8_t channel, radio_cb_t recvCB)
   ConnectTimeoutTimer = xTimerCreate(
       "Connect time out",             // 定时器任务名称
       500,                            // 延迟多少tick后执行回调函数
-      pdFALSE,                        // 执行一次,pdTRUE 循环执行
+      pdTRUE,                         // 执行一次,pdTRUE 循环执行
       (void *)&ConnectTimeoutTimerID, // 任务id
       IfTimeoutCB                     // 回调函数
   );
