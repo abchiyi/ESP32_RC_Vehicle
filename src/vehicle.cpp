@@ -43,6 +43,7 @@ bool HazardLight = false;   // 危险报警灯
 const double angStep = 90.00 / 256.00; // 转向°步长
 
 int Vehicle::ang;
+int Vehicle::gear;
 
 ControllerStatus Controller;
 
@@ -58,90 +59,6 @@ void setPWMPin(int pin, int pwmChannel)
   pinMode(pin, OUTPUT);
   ledcSetup(pwmChannel, 2000, 8);
   ledcAttachPin(pin, pwmChannel);
-}
-
-// 更新舵机转向角度
-void updateTurn()
-{
-  // 输入值为 -2047 ~ 0 ~ 2047
-  int joy = Controller.joyLHori;
-  int v = (round((double)abs(joy) / (double)8) * angStep); // 计算转向角度
-
-  Vehicle::ang = joy < 0 ? 90 + v : joy > 0 ? 90 - v
-                                            : 90;
-
-  // ang = 180 - ang; // 对输出结果取反
-  // ESP_LOGI(TAG, "Joy %d, ang %d", joy, ang);
-  TurnServo.write(Vehicle::ang);
-}
-
-#define BRAKE_RT 1
-#define BRAKE_LT 0
-
-int BRAKE_KEY;
-
-bool HOLD_RT = false;
-bool HOLD_LT = false;
-bool changed = false;
-int moveStatus = BRAKE;
-// 移动任务
-void TaskMove()
-{
-  int LT = Controller.trigLT;
-  int RT = Controller.trigRT;
-
-  // 确定前进方向;
-  if (LT || RT)
-  {
-    if (!changed)
-    {
-      HOLD_RT = (bool)RT;
-      HOLD_LT = !HOLD_RT ? (bool)LT : false;
-      BRAKE_KEY = HOLD_RT ? 0 : 1;
-      changed = true;
-    }
-  }
-  else
-  {
-    HOLD_RT = false;
-    HOLD_LT = false;
-    changed = false;
-  }
-
-  changed = !LT && !RT ? false : changed;
-  brake = BRAKE_KEY == BRAKE_RT ? RT : LT;
-
-  REVERSING_LIGHT = HOLD_LT ? 150 : 0; // 倒车灯
-
-  // ESP_LOGI(TAG, "Hold LT :%d, Hold RT :%d, Brake :%d", HOLD_LT, HOLD_RT, brake);
-
-  moveStatus = brake     ? BRAKE
-               : HOLD_RT ? FORWARD
-               : HOLD_LT ? REVERSE
-                         : SLIDE;
-
-  switch (moveStatus)
-  {
-  case BRAKE:
-    ledcWrite(CHANNEL_MOVE_F, 255);
-    ledcWrite(CHANNEL_MOVE_R, 255);
-    break;
-
-  case FORWARD:
-    ledcWrite(CHANNEL_MOVE_F, (int)(RT / 4));
-    ledcWrite(CHANNEL_MOVE_R, 0);
-    break;
-
-  case REVERSE:
-    ledcWrite(CHANNEL_MOVE_R, (int)(LT / 4));
-    ledcWrite(CHANNEL_MOVE_F, 0);
-    break;
-
-  default: // SLIDE
-    ledcWrite(CHANNEL_MOVE_R, 0);
-    ledcWrite(CHANNEL_MOVE_F, 0);
-    break;
-  }
 }
 
 /* 灯光任务 大灯，倒车灯，刹车灯*/
@@ -375,11 +292,91 @@ void LightSetup()
   xTaskCreate(TaskIndicatorLightControl, "IndicatorLightControl", 1024, NULL, 3, NULL);
 }
 
+// 更新舵机转向角度
+void updateTurn()
+{
+  // 输入值为 -2047 ~ 0 ~ 2047
+  int joy = Controller.joyLHori;
+  int v = (round((double)abs(joy) / (double)8) * angStep); // 计算转向角度
+
+  Vehicle::ang = joy < 0 ? 90 + v : joy > 0 ? 90 - v
+                                            : 90;
+
+  // ang = 180 - ang; // 对输出结果取反
+  // ESP_LOGI(TAG, "Joy %d, ang %d", joy, ang);
+  TurnServo.write(Vehicle::ang);
+}
+
+// 更新马达状态
+void updateMotor()
+{
+  static int BRAKE_KEY;
+  static bool HOLD_RT;
+  static bool HOLD_LT;
+  static bool changed;
+
+  int LT = Controller.trigLT;
+  int RT = Controller.trigRT;
+
+  // 确定前进方向;
+  if (LT || RT)
+  {
+    if (!changed)
+    {
+      HOLD_RT = (bool)RT;
+      HOLD_LT = !HOLD_RT ? (bool)LT : false;
+      BRAKE_KEY = HOLD_RT ? 0 : 1;
+      changed = true;
+    }
+  }
+  else
+  {
+    HOLD_RT = false;
+    HOLD_LT = false;
+    changed = false;
+  }
+
+  changed = !LT && !RT ? false : changed;
+  brake = BRAKE_KEY == BRAKE_RT ? RT : LT;
+
+  REVERSING_LIGHT = HOLD_LT ? 150 : 0; // 倒车灯
+
+  // ESP_LOGI(TAG, "Hold LT :%d, Hold RT :%d, Brake :%d", HOLD_LT, HOLD_RT, brake);
+
+  Vehicle::gear = brake     ? BRAKE
+                  : HOLD_RT ? FORWARD
+                  : HOLD_LT ? REVERSE
+                            : SLIDE;
+
+  switch (Vehicle::gear)
+  {
+  case BRAKE:
+    ledcWrite(CHANNEL_MOVE_F, 255);
+    ledcWrite(CHANNEL_MOVE_R, 255);
+    break;
+
+  case FORWARD:
+    ledcWrite(CHANNEL_MOVE_F, (int)(RT / 4));
+    ledcWrite(CHANNEL_MOVE_R, 0);
+    break;
+
+  case REVERSE:
+    ledcWrite(CHANNEL_MOVE_R, (int)(LT / 4));
+    ledcWrite(CHANNEL_MOVE_F, 0);
+    break;
+
+  default: // SLIDE
+    ledcWrite(CHANNEL_MOVE_R, 0);
+    ledcWrite(CHANNEL_MOVE_F, 0);
+    break;
+  }
+}
+
 // 将此函数放入主循环中
 void Vehicle::update()
 {
   updateTurn();
-  TaskMove();
+  updateMotor();
 };
 
 void Vehicle::begin(bool *connected)

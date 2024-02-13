@@ -5,6 +5,9 @@
 #define BRAKE 0
 #define SLIDE 2
 
+#define BRAKE_RT 1
+#define BRAKE_LT 0
+
 struct ControllerStatus
 {
   bool btnA, btnB, btnX, btnY;
@@ -26,6 +29,7 @@ class Vehicle
 private:
 public:
   static int ang;
+  static int gear;
 
   void begin(bool *connected);
   void update();
