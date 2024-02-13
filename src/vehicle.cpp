@@ -35,7 +35,7 @@ bool WIDTH_LAMP = false;    // 示宽灯
 int REVERSING_LIGHT = 0;    // 倒车灯
 int HeadLight = 0;          // 大灯   亮度0~255
 int StopLight = 0;          // 刹车灯 亮度0~255
-bool BRAKE = false;         // 刹车
+bool brake = false;         // 刹车
 bool LightTurnL = false;    // 左转灯
 bool LightTurnR = false;    // 右转灯
 bool HazardLight = false;   // 危险报警灯
@@ -75,15 +75,21 @@ void updateTurn()
   TurnServo.write(Vehicle::ang);
 }
 
-// 移动任务
-void TaskMove(
-    bool HOLD_RT,
-    bool HOLD_LT,
-    bool changed)
-{
+#define BRAKE_RT 1
+#define BRAKE_LT 0
 
+int BRAKE_KEY;
+
+bool HOLD_RT = false;
+bool HOLD_LT = false;
+bool changed = false;
+int moveStatus = BRAKE;
+// 移动任务
+void TaskMove()
+{
   int LT = Controller.trigLT;
   int RT = Controller.trigRT;
+
   // 确定前进方向;
   if (LT || RT)
   {
@@ -91,6 +97,7 @@ void TaskMove(
     {
       HOLD_RT = (bool)RT;
       HOLD_LT = !HOLD_RT ? (bool)LT : false;
+      BRAKE_KEY = HOLD_RT ? 0 : 1;
       changed = true;
     }
   }
@@ -100,37 +107,40 @@ void TaskMove(
     HOLD_LT = false;
     changed = false;
   }
-  // 当所控制按钮的值发生改变时，重设change以在下个循环重新计算前进方向
-  if (HOLD_LT != (bool)LT && HOLD_RT != (bool)RT)
-  {
-    changed = false;
-  }
 
-  BRAKE = LT && RT;                    // 两个扳机键同时按下开启刹车
+  changed = !LT && !RT ? false : changed;
+  brake = BRAKE_KEY == BRAKE_RT ? RT : LT;
+
   REVERSING_LIGHT = HOLD_LT ? 150 : 0; // 倒车灯
 
-  if (BRAKE) // 马达制动
+  // ESP_LOGI(TAG, "Hold LT :%d, Hold RT :%d, Brake :%d", HOLD_LT, HOLD_RT, brake);
+
+  moveStatus = brake     ? BRAKE
+               : HOLD_RT ? FORWARD
+               : HOLD_LT ? REVERSE
+                         : SLIDE;
+
+  switch (moveStatus)
   {
+  case BRAKE:
     ledcWrite(CHANNEL_MOVE_F, 255);
     ledcWrite(CHANNEL_MOVE_R, 255);
-  }
-  else
-  {
-    if (HOLD_RT)
-    {
-      ledcWrite(CHANNEL_MOVE_F, (int)(RT / 4));
-      ledcWrite(CHANNEL_MOVE_R, 0);
-    }
-    else if (HOLD_LT)
-    {
-      ledcWrite(CHANNEL_MOVE_R, (int)(LT / 4));
-      ledcWrite(CHANNEL_MOVE_F, 0);
-    }
-    else
-    {
-      ledcWrite(CHANNEL_MOVE_R, 0);
-      ledcWrite(CHANNEL_MOVE_F, 0);
-    }
+    break;
+
+  case FORWARD:
+    ledcWrite(CHANNEL_MOVE_F, (int)(RT / 4));
+    ledcWrite(CHANNEL_MOVE_R, 0);
+    break;
+
+  case REVERSE:
+    ledcWrite(CHANNEL_MOVE_R, (int)(LT / 4));
+    ledcWrite(CHANNEL_MOVE_F, 0);
+    break;
+
+  default: // SLIDE
+    ledcWrite(CHANNEL_MOVE_R, 0);
+    ledcWrite(CHANNEL_MOVE_F, 0);
+    break;
   }
 }
 
@@ -219,7 +229,7 @@ void TaskLightControll(void *pt)
                 : WIDTH_LAMP  ? 5
                               : 0;
 
-    StopLight = BRAKE        ? 255
+    StopLight = brake        ? 255
                 : WIDTH_LAMP ? 30
                              : 0;
 
@@ -369,7 +379,7 @@ void LightSetup()
 void Vehicle::update()
 {
   updateTurn();
-  TaskMove(HOLD_RT, HOLD_LT, changed);
+  TaskMove();
 };
 
 void Vehicle::begin(bool *connected)
@@ -385,6 +395,5 @@ void Vehicle::begin(bool *connected)
   pinMode(PIN_TURN, OUTPUT);
   TurnServo.setPeriodHertz(50);
   TurnServo.attach(PIN_TURN, 50, 2500);
-
   // xTaskCreate(TaskMove, "Move", 2048, NULL, 2, NULL);
 }

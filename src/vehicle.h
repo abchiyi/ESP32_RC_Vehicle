@@ -1,5 +1,10 @@
 #include <Arduino.h>
 
+#define REVERSE -1
+#define FORWARD 1
+#define BRAKE 0
+#define SLIDE 2
+
 struct ControllerStatus
 {
   bool btnA, btnB, btnX, btnY;
@@ -19,10 +24,6 @@ void updateRecvCB(const uint8_t *incomingData);
 class Vehicle
 {
 private:
-  bool HOLD_RT = false;
-  bool HOLD_LT = false;
-  bool changed = false;
-
 public:
   static int ang;
 
