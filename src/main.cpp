@@ -42,4 +42,7 @@ void setup()
 void loop()
 {
   vehicle.update();
+
+  radio.SendData.gear = vehicle.gear;
+  radio.SendData.ang = vehicle.ang;
 }

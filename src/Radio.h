@@ -5,6 +5,8 @@ typedef void (*radio_cb_t)(const uint8_t *incomingData);
 struct sendData
 {
   float volts;
+  int gear;
+  int ang;
 };
 
 /**
