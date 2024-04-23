@@ -127,6 +127,9 @@ void EspNowInit()
     ESP_LOGE(TAG, "AP Config failed.");
   }
 
+  WiFi.enableLongRange(true);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
+  esp_wifi_config_espnow_rate(WIFI_IF_STA, WIFI_PHY_RATE_LORA_500K);
   // esp_now_set
   static int counter = 0;
   esp_now_deinit(); // 重置 esp_now
