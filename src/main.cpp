@@ -34,7 +34,8 @@ void setup()
 {
   Serial.begin(115200);
   radio.begin(SSID, CHANNEL, updateRecvCB);
-  vehicle.begin(&radio.connected);
+  auto a = (bool)(radio.status == RADIO_CONNECTED);
+  vehicle.begin(&a);
   xTaskCreate(taskReadBatteryVolt, "taskReadBatteryVolt", 4096, NULL, 2, NULL);
 }
 
