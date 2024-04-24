@@ -9,7 +9,6 @@
 #define CHANNEL 1
 
 Vehicle vehicle;
-Radio radio;
 
 void taskReadBatteryVolt(void *pt)
 {

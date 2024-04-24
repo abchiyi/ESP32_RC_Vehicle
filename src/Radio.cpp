@@ -3,6 +3,7 @@
 #include <Radio.h>
 #include <esp_now.h>
 #include <esp_log.h>
+#include <esp_err.h>
 
 #define TAG "Radio"
 
@@ -19,6 +20,8 @@ radio_cb_t Radio::RECVCB;
 const char *Radio::SSID;
 bool Radio::connected;
 int Radio::channel;
+
+Radio radio;
 
 // 连接超时控制器
 TimerHandle_t ConnectTimeoutTimer;
@@ -63,7 +66,7 @@ void onRecvCb(const uint8_t *mac, const uint8_t *incomingData, int len)
     {
       ESP_LOGI(TAG, "pairing...");
       // 记录主机mac地址后向主机发送配对信息
-      WiFi.mode(WIFI_STA);
+      // WiFi.mode(WIFI_STA);
       esp_err_t result = esp_now_send(mac,
                                       (const uint8_t *)WiFi.softAPSSID().c_str(), sizeof((const uint8_t *)WiFi.softAPSSID().c_str()));
 
@@ -100,36 +103,15 @@ void onRecvCb(const uint8_t *mac, const uint8_t *incomingData, int len)
 // 初始化 espNow
 void EspNowInit()
 {
-
   Radio::connected = false; // re set flage
 
-  // 定义连接超时控制器
-  ConnectTimeoutTimer = xTimerCreate(
-      "Connect time out",             // 定时器任务名称
-      500,                            // 延迟多少tick后执行回调函数
-      pdFALSE,                        // 执行一次,pdTRUE 循环执行
-      (void *)&ConnectTimeoutTimerID, // 任务id
-      IfTimeoutCB                     // 回调函数
-  );
-
   // wifi set
-  delay(100);
-  WiFi.mode(WIFI_AP);
-  // esp_wifi_set_channel(CHANNEL, WIFI_SECOND_CHAN_NONE);
-
-  if (WiFi.softAP(Radio::SSID, PASSWORD, CHANNEL, 0))
-  {
-    ESP_LOGI(TAG, "AP Config Success. Broadcasting with AP: %s", String(Radio::SSID).c_str());
-    ESP_LOGI(TAG, "AP soft mac : %s, Channel : %u", WiFi.softAPmacAddress().c_str(), WiFi.channel());
-  }
-  else
-  {
-    ESP_LOGE(TAG, "AP Config failed.");
-  }
-
+  WiFi.mode(WIFI_STA);
   WiFi.enableLongRange(true);
+  esp_wifi_set_mode(WIFI_STA);
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
   esp_wifi_config_espnow_rate(WIFI_IF_STA, WIFI_PHY_RATE_LORA_500K);
+  radio.status = RADIO_BEFORE_WAIT_CONNECTION;
   // esp_now_set
   static int counter = 0;
   esp_now_deinit(); // 重置 esp_now
@@ -164,6 +146,23 @@ void TaskRadioMainLoop(void *pt)
 {
   while (true)
   {
+    switch (radio.status)
+    {
+    case RADIO_BEFORE_WAIT_CONNECTION:
+      if (WiFi.softAP(Radio::SSID, PASSWORD, CHANNEL, 0))
+      {
+        ESP_LOGI(TAG, "AP Config Success.SSID: %s , MAC : %s, CHANNEL : %d", Radio::SSID, WiFi.softAPmacAddress().c_str(), WiFi.channel());
+        radio.status = RADIO_WAIT_CONNECTION; // AP 开启成功则进入等待连接状态
+      }
+      else
+      {
+        ESP_LOGE(TAG, "AP Config failed.");
+      }
+      break;
+
+    default:
+      break;
+    }
     vTaskDelay(5);
   }
 }

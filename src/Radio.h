@@ -2,6 +2,12 @@
 
 typedef void (*radio_cb_t)(const uint8_t *incomingData);
 
+typedef enum radio_status
+{
+  RADIO_BEFORE_WAIT_CONNECTION,
+  RADIO_WAIT_CONNECTION,
+} radio_status_t;
+
 struct sendData
 {
   float volts;
@@ -23,5 +29,8 @@ public:
   static const char *SSID;           // 设备名称
   static sendData SendData;          // 待发送数据
 
+  radio_status_t status;
   void begin(const char *ssid, uint8_t channel, radio_cb_t recvCB);
 };
+
+extern Radio radio;
