@@ -22,7 +22,7 @@ struct ControllerStatus
   int16_t trigLT, trigRT;
 };
 
-void updateRecvCB(const uint8_t *incomingData);
+void updateRecvCB(uint8_t *incomingData);
 
 class Vehicle
 {

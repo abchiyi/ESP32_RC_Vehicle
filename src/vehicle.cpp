@@ -48,7 +48,7 @@ int Vehicle::gear;
 ControllerStatus Controller;
 
 // 回调函数，处理radio接收到的数据
-void updateRecvCB(const uint8_t *incomingData)
+void updateRecvCB(uint8_t *incomingData)
 {
   memcpy(&Controller, incomingData, sizeof(Controller));
 }

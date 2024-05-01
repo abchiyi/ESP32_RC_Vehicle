@@ -1,6 +1,6 @@
 #include <esp_now.h>
 
-typedef void (*radio_cb_t)(const uint8_t *incomingData);
+typedef void (*radio_cb_t)(uint8_t *incomingData);
 
 typedef enum radio_status
 {
@@ -19,6 +19,12 @@ struct sendData
   float volts;
   int gear;
   int ang;
+};
+
+struct HANDSHAKE_DATA
+{
+  uint8_t mac[ESP_NOW_ETH_ALEN];
+  uint32_t code = rand();
 };
 
 /**
