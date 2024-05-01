@@ -5,6 +5,7 @@
 #include <esp_log.h>
 #include <esp_err.h>
 #include <esp_mac.h>
+#include <vector>
 
 #define TAG "Radio"
 
@@ -43,6 +44,15 @@ const int ConnectTimeoutTimerID = 0;
 uint8_t CHANNEL; // 通讯频道
 
 void IfTimeoutCB(TimerHandle_t xTimer);
+
+template <typename T>
+bool compareVectorContents(std::vector<T> &vec1, std::vector<T> &vec2)
+{
+  if (vec1 == vec2)
+    return true;
+  else
+    return false;
+}
 
 /**
  * @brief 根据 mac 地址配对到指定的设备
@@ -97,13 +107,15 @@ bool pairTo(
 
 bool sendTo(const uint8_t *peer_addr, const uint8_t *data, size_t len)
 {
-  ;
+  ESP_LOGI(TAG, "Send data to " MACSTR "", MAC2STR(peer_addr));
   switch (esp_now_send(peer_addr, data, len))
   {
   case ESP_OK:
+    ESP_LOGI(TAG, "Send ok");
     return true;
 
   default:
+    ESP_LOGI(TAG, "Send fail");
     return false;
   }
 };
@@ -162,41 +174,65 @@ void IfTimeoutCB(TimerHandle_t xTimer)
 esp_err_t pairNewDevice()
 {
   HANDSHAKE_DATA hsd; // 握手数据包
-  uint8_t timeoutConter = 50;
-  if (RecvData.newData)
+  int timeoutConter = 1000;
+  uint16_t pairTimeOut = 10000; // 配对等待时间 /ms
+  uint8_t targetMAC[ESP_NOW_ETH_ALEN];
+  while (pairTimeOut)
   {
-    memcpy((void *)&hsd, RecvData.get(), sizeof(HANDSHAKE_DATA));
-    ESP_LOGI(TAG, "Connect Host, Mac :" MACSTR "", MAC2STR(RecvData.mac));
+    vTaskDelay(1);
+    pairTimeOut--;
 
-    if (pairTo(RecvData.mac, CHANNEL, WIFI_IF_AP))
-      radio.status = RADIO_BEFORE_DISCONNECT;
-
-    // 回复配对信息
-    WiFi.macAddress(hsd.mac);
-    if (!sendTo(hsd.mac, (const uint8_t *)&hsd, sizeof(HANDSHAKE_DATA)))
-      radio.status = RADIO_BEFORE_DISCONNECT;
-
-    ESP_LOGI(TAG, "Close Ap");
-    if (!WiFi.enableAP(false))
-      radio.status = RADIO_BEFORE_DISCONNECT;
-
-    while (timeoutConter) // 等待第二次握手
+    if (RecvData.newData)
     {
-      if (timeoutConter <= 1)
-        ESP_LOGI(TAG, "Timeout Connect fail");
-      if (RecvData.newData)
-      {
-        // 收到数据校验是否是目标主机的握手请求
-        memcpy((void *)&hsd, RecvData.get(), sizeof(HANDSHAKE_DATA));
-        if (hsd.mac == radio.peerInfo.peer_addr)
-          if (!sendTo(hsd.mac, (const uint8_t *)&hsd, sizeof(HANDSHAKE_DATA))) // 回复配对信息
-            radio.status = RADIO_BEFORE_DISCONNECT;
-      }
+      memcpy(&hsd, RecvData.get(), sizeof(HANDSHAKE_DATA));
+      ESP_LOGI(TAG, "Connect Host, Mac :" MACSTR "", MAC2STR(RecvData.mac));
 
-      timeoutConter--;
-      vTaskDelay(1);
+      // 接收到主机配对请求后，配对并回复握手信息
+      // 其中包含 STA 模式下的 mac 地址
+      memcpy(targetMAC, RecvData.mac, sizeof(targetMAC));
+      if (!pairTo(targetMAC, CHANNEL, WIFI_IF_STA))
+        return ESP_FAIL;
+
+      WiFi.macAddress(hsd.mac);
+      if (!sendTo(targetMAC, (const uint8_t *)&hsd, sizeof(HANDSHAKE_DATA)))
+        return ESP_FAIL;
+
+      // 关闭AP 切换到 STA 模式以避免被其他主机扫描到
+      ESP_LOGI(TAG, "Close Ap");
+      if (!WiFi.enableAP(false))
+        return ESP_FAIL;
+
+      while (timeoutConter) // 等待第二次握手
+      {
+        timeoutConter--;
+        vTaskDelay(1);
+
+        if (timeoutConter < 1)
+        {
+          ESP_LOGI(TAG, "Wait response time out");
+          return ESP_FAIL;
+        }
+
+        if (!RecvData.newData)
+          continue;
+        memcpy((void *)&hsd, RecvData.get(), sizeof(HANDSHAKE_DATA));
+        // 收到数据校验是否是目标主机的握手请求
+        // 收到数据校验是否是目标主机的握手请求
+        std::vector<uint8_t> va(std::begin(hsd.mac), std::end(hsd.mac));
+        std::vector<uint8_t> vb(std::begin(targetMAC), std::end(targetMAC));
+        if (!compareVectorContents(va, vb))
+          continue;
+
+        if (sendTo(targetMAC, (const uint8_t *)&hsd, sizeof(HANDSHAKE_DATA)))
+          return ESP_OK;
+        else
+          return ESP_FAIL;
+      }
     }
   }
+
+  ESP_LOGI(TAG, "Pair time out, no host to pair");
+  return ESP_FAIL;
 };
 
 void TaskRadioMainLoop(void *pt)
@@ -219,14 +255,12 @@ void TaskRadioMainLoop(void *pt)
 
     case RADIO_WAIT_CONNECTION:
       if (pairNewDevice() == ESP_OK)
-        radio.status = RADIO_BEFORE_CONNECTED;
-      else
       {
-        radio.status = RADIO_BEFORE_DISCONNECT;
+        radio.status = RADIO_BEFORE_CONNECTED;
         ESP_LOGI(TAG, "Connect Success");
       }
-
-      vTaskDelay(5);
+      else
+        radio.status = RADIO_BEFORE_DISCONNECT;
       break;
 
     case RADIO_BEFORE_CONNECTED:
@@ -256,13 +290,14 @@ void TaskRadioMainLoop(void *pt)
       break;
 
     case RADIO_BEFORE_DISCONNECT:
-      // 停止定时器
-      ESP_LOGI(TAG, "Host lost ... rest to wait connection");
-      radio.status = RADIO_BEFORE_WAIT_CONNECTION;
+      ESP_LOGI(TAG, "Host lost / Pair Fail");
+      radio.status = RADIO_DISCONNECT;
       // if (xTimerStop(ConnectTimeoutTimer, 100) != pdPASS)
       //   esp_system_abort("stop timer fial"); // 停止定时器失败
       break;
     case RADIO_DISCONNECT:
+      vTaskDelay(5);
+      // ESP_LOGI(TAG, "RADIO_DISCONNECT");
       break;
 
     default:
