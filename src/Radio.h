@@ -21,6 +21,23 @@ struct sendData
   int ang;
 };
 
+// 常规数据处理结构
+struct Data
+{
+  int len;
+  bool newData;
+  uint8_t *mac;
+  uint8_t *incomingData;
+  Data() : newData(false){};
+
+  uint8_t *get()
+  {
+    newData = false;
+    return incomingData;
+  }
+};
+
+// 握手数据结构
 struct HANDSHAKE_DATA
 {
   uint8_t mac[ESP_NOW_ETH_ALEN];
@@ -42,7 +59,9 @@ public:
 
   radio_status_t status;
   void begin(const char *ssid, uint8_t channel, radio_cb_t recvCB);
-  void initRadio(); // 初始化无线
+  void initRadio();     // 初始化无线
+  uint8_t timeOut = 50; // 通讯超时
+  Data RecvData;        // 接收到的数据
 };
 
 extern Radio radio;
