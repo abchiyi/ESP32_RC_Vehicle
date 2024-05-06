@@ -23,12 +23,20 @@ void taskReadBatteryVolt(void *pt)
     if (conter == 20)
     {
       conter = 0;
-      radio.SendData.volts = (float)(analogVolts / 20 * 3) / 1000.0;
+      // radio.SendData.volts = (float)(analogVolts / 20 * 3) / 1000.0;
       analogVolts = 0;
     }
     vTaskDelay(5);
   }
 }
+
+void ISR()
+{
+  if (radio.status == RADIO_CONNECTED)
+    radio.status = RADIO_BEFORE_DISCONNECT;
+  else
+    radio.status = RADIO_BEFORE_WAIT_CONNECTION;
+};
 
 void setup()
 {
@@ -36,6 +44,7 @@ void setup()
   radio.begin(SSID, CHANNEL, updateRecvCB);
   auto a = (bool)(radio.status == RADIO_CONNECTED);
   vehicle.begin(&a);
+  attachInterrupt(digitalPinToInterrupt(0), ISR, RISING);
   xTaskCreate(taskReadBatteryVolt, "taskReadBatteryVolt", 4096, NULL, 2, NULL);
 }
 
@@ -43,6 +52,6 @@ void loop()
 {
   vehicle.update();
 
-  radio.SendData.gear = vehicle.gear;
-  radio.SendData.ang = vehicle.ang;
+  // radio.SendData.gear = vehicle.gear;
+  // radio.SendData.ang = vehicle.ang;
 }

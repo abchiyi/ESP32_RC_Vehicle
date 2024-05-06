@@ -2,6 +2,18 @@
 
 typedef void (*radio_cb_t)(uint8_t *incomingData);
 
+#define MAX_CHANNEL 8 // 最大控制通道数量
+
+typedef esp_err_t (*send_cb_t)(uint8_t *);
+typedef uint8_t mac_addr_t[ESP_NOW_ETH_ALEN];
+
+// 通讯结构体
+typedef struct radio_data
+{
+  mac_addr_t mac_addr;           // 发送者地址
+  uint16_t channel[MAX_CHANNEL]; // 通道信息
+} radio_data_t;
+
 typedef enum radio_status
 {
   RADIO_BEFORE_WAIT_CONNECTION,
@@ -14,54 +26,28 @@ typedef enum radio_status
   RADIO_DISCONNECT,
 } radio_status_t;
 
-struct sendData
-{
-  float volts;
-  int gear;
-  int ang;
-};
-
-// 常规数据处理结构
-struct Data
-{
-  int len;
-  bool newData;
-  uint8_t *mac;
-  uint8_t *incomingData;
-  Data() : newData(false){};
-
-  uint8_t *get()
-  {
-    newData = false;
-    return incomingData;
-  }
-};
-
-// 握手数据结构
-struct HANDSHAKE_DATA
-{
-  uint8_t mac[ESP_NOW_ETH_ALEN];
-  uint32_t code = rand();
-};
-
 /**
- * @brief 被控设备无线通讯
+ * @brief 无线通讯
  */
 class Radio
 {
 private:
 public:
-  static esp_now_peer_info peerInfo; // 无线控制器的配对信息
-  static int channel;                // 通讯频道 0 ~ 14
-  static radio_cb_t RECVCB;          // 接收数据处理回调
-  static const char *SSID;           // 设备名称
-  static sendData SendData;          // 待发送数据
+  radio_cb_t RECVCB;           // 接收数据处理回调
+  uint8_t *dataToSent;         // 待发送数据
+  esp_now_peer_info peer_info; // 配对信息
+  const char *SSID;            // 设备名称
+  radio_status_t status;       // 无线状态
+  int channel;                 // 通讯频道 0 ~ 14
 
-  radio_status_t status;
+  template <typename T>
+  bool send(const T &data);
+
   void begin(const char *ssid, uint8_t channel, radio_cb_t recvCB);
-  void initRadio();     // 初始化无线
-  uint8_t timeOut = 50; // 通讯超时
-  Data RecvData;        // 接收到的数据
+  void initRadio(); // 初始化无线
+
+  uint8_t timeOut = 50; // 通讯超时, （timeOut * sendGap) ms
+  uint8_t sendGap = 5;  // 发送间隔
 };
 
 extern Radio radio;
