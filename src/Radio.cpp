@@ -27,6 +27,29 @@ uint8_t targetMAC[ESP_NOW_ETH_ALEN];
 void IfTimeoutCB(TimerHandle_t xTimer);
 
 /**
+ * @brief 等待主机握手
+ * @param timeout 超时等待
+ * @param data 收到响应时接收数据将写入其中
+ */
+bool wait_response(TickType_t waitTick, radio_data_t *data)
+{
+  if (xQueueReceive(Q_RECV_DATA, data, waitTick) != pdPASS)
+  {
+    ESP_LOGI(TAG, "Wait for response timed out");
+    return false;
+  }
+  return true;
+};
+
+// 对比 mac地址是否一致
+bool checkMac(mac_addr_t mac1, mac_addr_t mac2)
+{
+  if (memcmp(mac1, mac2, sizeof(mac_addr_t)) == 0)
+    return true;
+  return false;
+};
+
+/**
  * @brief 根据 mac 地址配对到指定的设备
  * @param macaddr 数组 mac地址
  * @param channel wifi 频道
@@ -113,7 +136,8 @@ void onRecv(const uint8_t *mac, const uint8_t *incomingData, int len)
   memcpy(&data.mac_addr, mac, sizeof(data.mac_addr));
 
   if (xQueueSend(Q_RECV_DATA, &data, 10) != pdPASS)
-    ESP_LOGI(TAG, "Queue is full.");
+    ;
+  // ESP_LOGI(TAG, "Queue is full.");
   // else
   //   ESP_LOGI(TAG, "Queue is add.");
 
@@ -182,6 +206,28 @@ void IfTimeoutCB(TimerHandle_t xTimer)
     ESP_LOGI(TAG, "Timer stop");
 }
 
+/**
+ * @brief 与指定地址握手
+ */
+bool handshake(mac_addr_t mac_addr)
+{
+  radio_data_t data;
+  ESP_LOGI(TAG, "wait handshake");
+  if (!wait_response(radio.timeOut, &data))
+    return false;
+
+  // TODO 掉电后无法设置正确 mac 地址导致重连失败
+  if (checkMac(mac_addr, data.mac_addr))
+  {
+    memset(&data, 0, sizeof(data));
+    radio.send(data);
+    return true;
+  }
+
+  ESP_LOGI(TAG, "Host :" MACSTR "not paired \n", MAC2STR(data.mac_addr));
+  return false;
+}
+
 esp_err_t pairNewDevice()
 {
   radio_data_t data;
@@ -202,14 +248,29 @@ esp_err_t pairNewDevice()
     if (memcmp(mac1, mac2, sizeof(mac_addr_t)) == 0)
       return true;
     return false;
-    // ESP_LOGI(TAG, "handshake fail, :" MACSTR ", R:" MACSTR "",
-    //          MAC2STR(Host_MAC), MAC2STR(data.mac_addr));
+  };
+
+  // 切换 AP 状态
+  auto AP_SWITCH = [&](bool ap_switch)
+  {
+    if (ap_switch)
+    {
+      ESP_LOGI(TAG, "AP ON");
+      WiFi.enableAP(true);
+    }
+    else
+    {
+      ESP_LOGI(TAG, "AP OFF");
+      WiFi.enableAP(false);
+    }
   };
 
   ESP_LOGI(TAG, "Wait connection");
   if (!wait_response(PAIR_TIME_OUT))
     return ESP_FAIL;
 
+  // 关闭 AP 避免被其他主机扫描到
+  AP_SWITCH(false);
   // 接收到主机配对请求后，添加对等并回复主机
   ESP_LOGI(TAG, "Connect Host, Mac :" MACSTR "", MAC2STR(data.mac_addr));
   memcpy(Host_MAC, data.mac_addr, sizeof(Host_MAC));
@@ -246,10 +307,6 @@ esp_err_t pairNewDevice()
 
 void TaskRadioMainLoop(void *pt)
 {
-  const uint8_t send_error_max = 3; // 最大发送错误
-  uint8_t send_error_counter = 0;   // 发送错误计数器
-  uint8_t timeout_counter = 0;      // 连接超时计数器
-
   while (true)
   {
     switch (radio.status)
@@ -262,58 +319,43 @@ void TaskRadioMainLoop(void *pt)
       }
 
       ESP_LOGI(TAG, "AP Config Success.SSID: %s , MAC : %s, CHANNEL : %d", radio.SSID, WiFi.softAPmacAddress().c_str(), WiFi.channel());
-      WiFi.setTxPower(WIFI_POWER_19_5dBm);
       radio.status = RADIO_WAIT_CONNECTION; // AP 开启成功则进入等待连接状态
       break;
 
     case RADIO_WAIT_CONNECTION:
-      if (pairNewDevice() == ESP_OK)
-        radio.status = RADIO_BEFORE_CONNECTED;
-      else
-        radio.status = RADIO_BEFORE_DISCONNECT;
+      radio.status = pairNewDevice() == ESP_OK
+                         ? RADIO_BEFORE_CONNECTED
+                         : RADIO_BEFORE_DISCONNECT;
       break;
 
     case RADIO_BEFORE_CONNECTED:
       ESP_LOGI(TAG, "Connect Success");
-      // 关闭AP 切换到 STA 模式以避免被其他主机扫描到
-      ESP_LOGI(TAG, "Close Ap");
-      WiFi.enableAP(false);
       radio.status = RADIO_CONNECTED;
       break;
 
     case RADIO_CONNECTED:
-      if (xSemaphoreTake(SEND_READY, 100) == pdTRUE)
+      if (xSemaphoreTake(SEND_READY, radio.timeOut) == pdTRUE)
       {
-        // sendTo(targetMAC, (uint8_t *)&radio.SendData, sizeof(radio.SendData));
-        vTaskDelay(5);
+        radio.send(radio.dataToSent);
         break;
       }
+      // TODO 通讯多次超时判断连接断开
       radio.status = RADIO_BEFORE_DISCONNECT;
       ESP_LOGI(TAG, "DISCONNECT with timeout");
-      vTaskDelay(10);
       break;
 
     case RADIO_BEFORE_DISCONNECT:
-      ESP_LOGI(TAG, "Host lost / Pair Fail");
+      ESP_LOGI(TAG, "RADIO_DISCONNECT");
+      xQueueReset(Q_RECV_DATA); // 断开连接清空队列
       radio.status = RADIO_DISCONNECT;
-      // if (xTimerStop(ConnectTimeoutTimer, 100) != pdPASS)
-      //   esp_system_abort("stop timer fial"); // 停止定时器失败
       break;
     case RADIO_DISCONNECT:
-      if (xSemaphoreTake(SEND_READY, 50) == pdTRUE)
-      {
-        // memcpy(&r_hsd, radio.RecvData.incomingData, sizeof(r_hsd));
-        // pairTo(radio.RecvData.mac, CHANNEL, WIFI_IF_STA);
-        // sendTo(radio.RecvData.mac, (uint8_t *)&r_hsd, sizeof(r_hsd));
-
-        if (xSemaphoreTake(SEND_READY, 50) == pdTRUE)
-          radio.status = RADIO_BEFORE_CONNECTED;
-      }
-      // ESP_LOGI(TAG, "RADIO_DISCONNECT");
+      if (handshake(radio.peer_info.peer_addr))
+        radio.status = RADIO_BEFORE_CONNECTED;
       break;
 
     default:
-      vTaskDelay(5);
+      esp_system_abort("Radio status error");
       break;
     }
   }

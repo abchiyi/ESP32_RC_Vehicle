@@ -34,7 +34,7 @@ class Radio
 private:
 public:
   radio_cb_t RECVCB;           // 接收数据处理回调
-  uint8_t *dataToSent;         // 待发送数据
+  radio_data_t dataToSent;     // 待发送数据
   esp_now_peer_info peer_info; // 配对信息
   const char *SSID;            // 设备名称
   radio_status_t status;       // 无线状态
@@ -46,8 +46,8 @@ public:
   void begin(const char *ssid, uint8_t channel, radio_cb_t recvCB);
   void initRadio(); // 初始化无线
 
-  uint8_t timeOut = 50; // 通讯超时, （timeOut * sendGap) ms
-  uint8_t sendGap = 5;  // 发送间隔
+  int timeOut = 50;    // 通讯超时, （timeOut * sendGap) ms
+  uint8_t sendGap = 5; // 发送间隔
 };
 
 extern Radio radio;
