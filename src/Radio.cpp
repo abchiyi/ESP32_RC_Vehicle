@@ -13,6 +13,7 @@
 #define PAIR_TIME_OUT 60000 // 配对等待时间 /ms
 
 Radio radio;
+radio_data_t radio_data;
 
 QueueHandle_t Q_RECV_DATA = xQueueCreate(10, sizeof(radio_data_t));
 SemaphoreHandle_t SEND_READY = NULL; // 允许发送
@@ -23,8 +24,6 @@ const int ConnectTimeoutTimerID = 0;
 
 uint8_t CHANNEL; // 通讯频道
 uint8_t targetMAC[ESP_NOW_ETH_ALEN];
-
-void IfTimeoutCB(TimerHandle_t xTimer);
 
 /**
  * @brief 等待主机握手
@@ -55,7 +54,7 @@ bool checkMac(mac_addr_t mac1, mac_addr_t mac2)
  * @param channel wifi 频道
  * @param ifidx 要使用的wifi接口用于收发数据
  */
-bool pairTo(
+bool add_peer(
     mac_addr_t macaddr,
     uint8_t channel,
     wifi_interface_t ifidx = WIFI_IF_STA)
@@ -128,23 +127,18 @@ bool Radio::send(const T &data)
            error_message.c_str(), MAC2STR(this->peer_info.peer_addr));
   return false;
 }
+
 // 接收回调
 void onRecv(const uint8_t *mac, const uint8_t *incomingData, int len)
 {
-  radio_data data;
-  memcpy(&data, incomingData, sizeof(data));
-  memcpy(&data.mac_addr, mac, sizeof(data.mac_addr));
-
-  if (xQueueSend(Q_RECV_DATA, &data, 10) != pdPASS)
+  memcpy(&radio_data, incomingData, sizeof(radio_data));
+  memcpy(&radio_data.mac_addr, mac, sizeof(radio_data.mac_addr));
+  if (xQueueSend(Q_RECV_DATA, &radio_data, 10) != pdPASS)
     ;
   // ESP_LOGI(TAG, "Queue is full.");
   // else
   //   ESP_LOGI(TAG, "Queue is add.");
-
   xSemaphoreGive(SEND_READY); // 收到数据后允许发送
-
-  // ESP_LOGI(TAG, "Recv on " MACSTR "", MAC2STR(mac));
-  xTimerStop(ConnectTimeoutTimer, 10);
 }
 
 // 发送回调
@@ -152,6 +146,8 @@ void onSend(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
   if (status)
     ESP_LOGI(TAG, "Send to " MACSTR " FAIl", MAC2STR(mac_addr));
+  // else
+  //   ESP_LOGI(TAG, "Send to " MACSTR " SUCCESS", MAC2STR(mac_addr));
 }
 
 // 初始化 espNow
@@ -198,12 +194,14 @@ void Radio::initRadio()
 // 连接超时控制器回调
 void IfTimeoutCB(TimerHandle_t xTimer)
 {
-  ESP_LOGW(TAG, "Connect time out, reset to pair");
-  radio.status = RADIO_BEFORE_DISCONNECT;
-  if (xTimerStop(ConnectTimeoutTimer, 100) != pdPASS)
-    esp_system_abort("stop timer fial"); // 停止定时器失败
-  else
-    ESP_LOGI(TAG, "Timer stop");
+  int meme_free_size = esp_get_free_heap_size();
+  ESP_LOGI(TAG, "Free mem size %d", meme_free_size);
+
+  // radio.status = RADIO_BEFORE_DISCONNECT;
+  // if (xTimerStop(ConnectTimeoutTimer, 10) != pdPASS)
+  //   esp_system_abort("stop timer fial"); // 停止定时器失败
+  // else
+  //   ESP_LOGI(TAG, "Timer stop");
 }
 
 /**
@@ -211,44 +209,26 @@ void IfTimeoutCB(TimerHandle_t xTimer)
  */
 bool handshake(mac_addr_t mac_addr)
 {
-  radio_data_t data;
+  // radio_data_t data;
   ESP_LOGI(TAG, "wait handshake");
-  if (!wait_response(radio.timeOut, &data))
+  if (!wait_response(radio.timeOut, &radio_data))
     return false;
 
   // TODO 掉电后无法设置正确 mac 地址导致重连失败
-  if (checkMac(mac_addr, data.mac_addr))
+  if (checkMac(mac_addr, radio_data.mac_addr))
   {
-    memset(&data, 0, sizeof(data));
-    radio.send(data);
+    memset(&radio_data, 0, sizeof(radio_data));
+    radio.send(radio_data);
     return true;
   }
 
-  ESP_LOGI(TAG, "Host :" MACSTR "not paired \n", MAC2STR(data.mac_addr));
+  ESP_LOGI(TAG, "Host :" MACSTR " not paired \n", MAC2STR(radio_data.mac_addr));
   return false;
 }
 
 esp_err_t pairNewDevice()
 {
-  radio_data_t data;
   mac_addr_t Host_MAC;
-
-  auto wait_response = [&](uint32_t timeout)
-  {
-    if (xQueueReceive(Q_RECV_DATA, &data, timeout) != pdPASS)
-    {
-      ESP_LOGI(TAG, "Wait for response timed out");
-      return false;
-    }
-    return true;
-  };
-
-  auto checkMac = [&](mac_addr_t mac1, mac_addr_t mac2)
-  {
-    if (memcmp(mac1, mac2, sizeof(mac_addr_t)) == 0)
-      return true;
-    return false;
-  };
 
   // 切换 AP 状态
   auto AP_SWITCH = [&](bool ap_switch)
@@ -266,21 +246,22 @@ esp_err_t pairNewDevice()
   };
 
   ESP_LOGI(TAG, "Wait connection");
-  if (!wait_response(PAIR_TIME_OUT))
+  if (!wait_response(PAIR_TIME_OUT, &radio_data))
     return ESP_FAIL;
 
   // 关闭 AP 避免被其他主机扫描到
   AP_SWITCH(false);
+
   // 接收到主机配对请求后，添加对等并回复主机
-  ESP_LOGI(TAG, "Connect Host, Mac :" MACSTR "", MAC2STR(data.mac_addr));
-  memcpy(Host_MAC, data.mac_addr, sizeof(Host_MAC));
-  WiFi.macAddress((uint8_t *)&data.channel[0]); // 写入 STA mac 地址
-  if (!pairTo(data.mac_addr, CHANNEL, WIFI_IF_STA))
+  ESP_LOGI(TAG, "Connect Host, Mac :" MACSTR "", MAC2STR(radio_data.mac_addr));
+  memcpy(Host_MAC, radio_data.mac_addr, sizeof(Host_MAC)); // 获取主机地址
+  WiFi.macAddress((uint8_t *)&radio_data.channel[0]);      // 写入 STA mac
+  if (!add_peer(radio_data.mac_addr, CHANNEL, WIFI_IF_STA))
     return ESP_FAIL;
-  radio.send(data);
+  radio.send(radio_data);
 
   /**
-   * 期间有10倍&10次接受响应的机会，
+   * 配对期间有10次接受响应的机会，
    * 当全部不是来自目标主机的响应时判断配对失败
    * 等待目标主机第一次响应,
    */
@@ -290,19 +271,21 @@ esp_err_t pairNewDevice()
   uint8_t counter_max = 10;
   while (true)
   {
-    if (wait_response(radio.timeOut))
-      if (checkMac(Host_MAC, data.mac_addr))
+    if (wait_response(radio.timeOut, &radio_data))
+      if (checkMac(Host_MAC, radio_data.mac_addr))
         break;
     counter++;
     if (counter >= counter_max)
-      return ESP_FAIL;
+      ESP_LOGI(TAG, "Pair time out, no host to pair");
+    return ESP_FAIL;
   }
-  memset(&data, 0, sizeof(data)); // 清除发送数据内的mac地址
-  radio.send(data);
+  /**
+   * 在配对过程中通道 0 有数据主机则认为从机引导主机配对至STA模式地址，则发送前
+   * 需清空通道 0， 清除发送数据内的mac地址
+   */
+  memset(&radio_data, 0, sizeof(radio_data));
+  radio.send(radio_data);
   return ESP_OK;
-
-  ESP_LOGI(TAG, "Pair time out, no host to pair");
-  return ESP_FAIL;
 };
 
 void TaskRadioMainLoop(void *pt)
@@ -331,6 +314,7 @@ void TaskRadioMainLoop(void *pt)
     case RADIO_BEFORE_CONNECTED:
       ESP_LOGI(TAG, "Connect Success");
       radio.status = RADIO_CONNECTED;
+      xSemaphoreTake(SEND_READY, 1);
       break;
 
     case RADIO_CONNECTED:
@@ -339,7 +323,6 @@ void TaskRadioMainLoop(void *pt)
         radio.send(radio.dataToSent);
         break;
       }
-      // TODO 通讯多次超时判断连接断开
       radio.status = RADIO_BEFORE_DISCONNECT;
       ESP_LOGI(TAG, "DISCONNECT with timeout");
       break;
@@ -361,7 +344,7 @@ void TaskRadioMainLoop(void *pt)
   }
 }
 // 启动 esp_now 通讯
-void Radio::begin(const char *ssid, uint8_t channel, radio_cb_t recvCB)
+void Radio::begin(const char *ssid, uint8_t channel)
 {
   channel = channel;
   SSID = ssid;
@@ -369,11 +352,11 @@ void Radio::begin(const char *ssid, uint8_t channel, radio_cb_t recvCB)
   SEND_READY = xSemaphoreCreateBinary();
   // 定义连接超时控制器
   ConnectTimeoutTimer = xTimerCreate(
-      "Connect time out",             // 定时器任务名称
-      500,                            // 延迟多少tick后执行回调函数
-      pdTRUE,                         // 执行一次,pdTRUE 循环执行
-      (void *)&ConnectTimeoutTimerID, // 任务id
-      IfTimeoutCB                     // 回调函数
+      "Connect time out", // 定时器任务名称
+      1000,               // 延迟多少tick后执行回调函数
+      pdTRUE,             // 执行一次,pdTRUE 循环执行
+      0,                  // 任务id
+      IfTimeoutCB         // 回调函数
   );
 
   this->initRadio();

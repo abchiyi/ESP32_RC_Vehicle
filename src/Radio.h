@@ -1,14 +1,12 @@
 #include <esp_now.h>
 
-typedef void (*radio_cb_t)(uint8_t *incomingData);
-
 #define MAX_CHANNEL 8 // 最大控制通道数量
 
 typedef esp_err_t (*send_cb_t)(uint8_t *);
 typedef uint8_t mac_addr_t[ESP_NOW_ETH_ALEN];
 
 // 通讯结构体
-typedef struct radio_data
+typedef struct
 {
   mac_addr_t mac_addr;           // 发送者地址
   uint16_t channel[MAX_CHANNEL]; // 通道信息
@@ -33,7 +31,6 @@ class Radio
 {
 private:
 public:
-  radio_cb_t RECVCB;           // 接收数据处理回调
   radio_data_t dataToSent;     // 待发送数据
   esp_now_peer_info peer_info; // 配对信息
   const char *SSID;            // 设备名称
@@ -43,11 +40,11 @@ public:
   template <typename T>
   bool send(const T &data);
 
-  void begin(const char *ssid, uint8_t channel, radio_cb_t recvCB);
+  void begin(const char *ssid, uint8_t channel);
   void initRadio(); // 初始化无线
 
-  int timeOut = 50;    // 通讯超时, （timeOut * sendGap) ms
-  uint8_t sendGap = 5; // 发送间隔
+  uint8_t timeOut = 100; // 通讯超时
+  uint8_t sendGap = 5;   // 发送间隔
 };
 
 extern Radio radio;
