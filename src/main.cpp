@@ -1,12 +1,13 @@
-// #include <esp32-hal-log.h>
 #include <esp_log.h>
 #include <Arduino.h>
-// #include <vehicle.h>
+#include <vehicle.h>
 #include <Radio.h>
 
 #define TAG "Main RC Vehicle"
 #define SSID "Slave_2"
 #define CHANNEL 1
+
+Vehicle vehicle;
 
 // void taskReadBatteryVolt(void *pt)
 // {
@@ -40,16 +41,11 @@ void setup()
 {
   Serial.begin(115200);
   radio.begin(SSID, CHANNEL);
-  auto a = (bool)(radio.status == RADIO_CONNECTED);
+  vehicle.begin();
   attachInterrupt(digitalPinToInterrupt(0), ISR, RISING);
-  // vehicle.begin(&a);
   // xTaskCreate(taskReadBatteryVolt, "taskReadBatteryVolt", 4096, NULL, 2, NULL);
 }
 
 void loop()
 {
-  // vehicle.update();
-
-  // radio.SendData.gear = vehicle.gear;
-  // radio.SendData.ang = vehicle.ang;
 }
