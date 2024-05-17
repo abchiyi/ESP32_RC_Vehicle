@@ -9,7 +9,7 @@ Servo TurnServo;
 bool *ControllerConnected; // 连接状态
 
 // 定义控制 Pin
-#define PIN_MOVE_F 17    // 前进控制
+#define PIN_MOVE_F 10    // 前进控制
 #define PIN_MOVE_R 16    // 倒车控制
 #define CHANNEL_MOVE_F 4 // 马达驱动 pwm 通道
 #define CHANNEL_MOVE_R 5 // 马达驱动 pwm 通道
@@ -165,6 +165,7 @@ void task_vehicle_main(void *pd)
       digitalWrite(PIN_MOVE_F, data.channel[0]);
       // updateMotor(&data);
     }
+    vTaskDelay(1);
   }
 }
 

@@ -21,11 +21,11 @@ SemaphoreHandle_t radio_data_mutex;  // 资源锁
 SemaphoreHandle_t SEND_READY = NULL; // 允许发送
 
 // 接收数据队列
-QueueHandle_t Q_RECV_DATA = xQueueCreate(10, sizeof(radio_data_t));
+QueueHandle_t Q_RECV_DATA = xQueueCreate(2, sizeof(radio_data_t));
 
 // 向下数据队列，将处理后的数据发布到下级任务
-QueueHandle_t Q_DATA_RECV = xQueueCreate(10, sizeof(radio_data_t));
-QueueHandle_t Q_DATA_SEND = xQueueCreate(10, sizeof(radio_data_t));
+QueueHandle_t Q_DATA_RECV = xQueueCreate(2, sizeof(radio_data_t));
+QueueHandle_t Q_DATA_SEND = xQueueCreate(2, sizeof(radio_data_t));
 
 /**
  * 计时器，当连接超时执行
@@ -134,13 +134,15 @@ bool add_peer(
 template <typename T>
 bool Radio::send(const T &data)
 {
+  // ESP_LOGI(TAG, "Send to " MACSTR " - pd of : %d", MAC2STR(this->peer_info.peer_addr), &data);
+
   auto status = esp_now_send(this->peer_info.peer_addr,
                              (uint8_t *)&data, sizeof(data));
-  String error_message;
 
   if (status == ESP_OK)
     return true;
 
+  String error_message;
   switch (status)
   {
   case ESP_ERR_ESPNOW_NO_MEM:
@@ -154,7 +156,7 @@ bool Radio::send(const T &data)
   }
 
   ESP_LOGI(TAG, "Send to " MACSTR " - %s",
-           error_message.c_str(), MAC2STR(this->peer_info.peer_addr));
+           MAC2STR(this->peer_info.peer_addr), error_message.c_str());
   return false;
 }
 
@@ -171,11 +173,26 @@ void onRecv(const uint8_t *mac, const uint8_t *incomingData, int len)
   //   ESP_LOGI(TAG, "Queue is add.");
 }
 
+uint8_t counter_resend = 0;
 // 发送回调
 void onSend(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
+  using namespace std;
   if (status)
+  {
     ESP_LOGI(TAG, "Send to " MACSTR " FAIl", MAC2STR(mac_addr));
+    counter_resend++;
+  }
+  else
+    counter_resend = 0;
+
+  if (counter_resend >= radio.resend_count &&
+      radio.status != RADIO_DISCONNECT &&
+      radio.status != RADIO_BEFORE_DISCONNECT)
+  {
+    ESP_LOGI(TAG, "DISCONNECT with timeout");
+    radio.status = RADIO_BEFORE_DISCONNECT;
+  }
   // else
   //   ESP_LOGI(TAG, "Send to " MACSTR " SUCCESS", MAC2STR(mac_addr));
 }
@@ -308,7 +325,8 @@ esp_err_t pairNewDevice()
 void TaskRadioMainLoop(void *pt)
 {
   uint8_t resend_counter = 0;
-
+  static TickType_t end;
+  static TickType_t start;
   while (true)
   {
     switch (radio.status)
@@ -333,30 +351,20 @@ void TaskRadioMainLoop(void *pt)
     case RADIO_BEFORE_CONNECTED:
       ESP_LOGI(TAG, "Connect Success");
       radio.status = RADIO_CONNECTED;
+      xTimerStart(ConnectTimeoutTimer, 5);
       break;
 
     case RADIO_CONNECTED:
-      wait_response(radio.timeout_resend, &radio_data_recv)
-          ? resend_counter = 0 // 正常发送重置计数器
-          : resend_counter++;  // 未收到回复时 计数器+1
-
-      // 校验是否是来自目标主机的数据，非目标主机则不响应
-      // if (checkMac(radio.peer_info.peer_addr, radio_data.mac_addr))
-      //   break;
-
-      xQueueReceive(Q_DATA_SEND, &radio_data_send, 10);
-      radio.send(radio_data_send); // 回传数据
-
-      if (!resend_counter) // 通知其他任务有数据传入
+      if (radio.status != RADIO_CONNECTED)
+        break;
+      if (wait_response(radio.timeout_resend, &radio_data_recv))
+      {
+        xTimerStart(ConnectTimeoutTimer, 1);
         if (xQueueSend(Q_DATA_RECV, &radio_data_recv, 1) != pdPASS)
           ;
-
-      // 多次重发未收到响应则认为主机已断开连接
-      if (resend_counter >= radio.resend_count)
-      {
-        ESP_LOGI(TAG, "DISCONNECT with timeout");
-        radio.status = RADIO_BEFORE_DISCONNECT;
+        radio.send(radio_data_recv); // 回传数据
       }
+      // xQueueReceive(Q_DATA_SEND, &radio_data_send, 5);
       break;
 
     case RADIO_BEFORE_DISCONNECT:
@@ -396,7 +404,7 @@ void Radio::begin(const char *ssid, uint8_t channel)
   );
 
   this->initRadio();
-  xTaskCreate(TaskRadioMainLoop, "TaskRadioMainLoop", 4096, NULL, 2, NULL);
+  xTaskCreate(TaskRadioMainLoop, "TaskRadioMainLoop", 4096, NULL, 24, NULL);
 }
 
 /**

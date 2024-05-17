@@ -50,9 +50,9 @@ public:
    * freeRTOS 在esp32 一个 tick 为 1ms
    * 以下定义的超时值单位为 1ms
    */
-  uint8_t timeout_disconnect = 120; // 超时断开连接
-  uint8_t timeout_resend = 80;      // 超时重发
-  uint8_t resend_count = 2;         // 超时重发次数
+  uint8_t timeout_resend = 50;      // 超时重发
+  uint8_t resend_count = 5;         // 超时重发次数
+  uint8_t timeout_disconnect = 250; // 超时断开连接
 };
 
 extern Radio radio;
