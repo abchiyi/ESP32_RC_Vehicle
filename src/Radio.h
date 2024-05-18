@@ -1,6 +1,6 @@
 #include <esp_now.h>
 
-#define MAX_CHANNEL 8 // 最大控制通道数量
+#define RADIO_CHANNEL_MAX 8 // 最大控制通道数量
 
 typedef esp_err_t (*send_cb_t)(uint8_t *);
 
@@ -9,8 +9,8 @@ typedef uint8_t mac_addr_t[ESP_NOW_ETH_ALEN];
 // 通讯结构体
 typedef struct
 {
-  mac_addr_t mac_addr;           // 发送者地址
-  uint16_t channel[MAX_CHANNEL]; // 通道信息
+  mac_addr_t mac_addr;                 // 发送者地址
+  uint16_t channel[RADIO_CHANNEL_MAX]; // 通道信息
 } radio_data_t;
 
 typedef enum radio_status
@@ -54,5 +54,39 @@ public:
   uint8_t resend_count = 5;         // 超时重发次数
   uint8_t timeout_disconnect = 250; // 超时断开连接
 };
+
+typedef struct channel_data
+{
+  uint16_t value;
+  uint8_t mode;
+} channel_data_t;
+
+typedef struct channel_data_int
+{
+  int16_t value;
+  uint8_t mode;
+} channel_data_int_t;
+
+/**
+ * @brief 读取组合通道数据
+ * @param radio_data 收到的数据
+ * @param channle 要读取的通道 最大通道号参考0 ~ RADIO_CHANNEL_MAX - 1
+ */
+channel_data_t read_channel_data(radio_data_t radio_data, int channle);
+
+/**
+ * @brief 读取组合通道数据
+ * @param radio_data 收到的数据
+ * @param channle 要读取的通道 最大通道号参考0 ~ RADIO_CHANNEL_MAX - 1
+ * @param intValue 指定读取 高12bit为有符号整数
+ */
+channel_data_int_t read_channel_data(radio_data_t radio_data, int channle, bool intValue);
+
+/**
+ * @brief 输出一个高低位合并的数值
+ * @param value1 12bit特数值
+ * @param value2 4 bit数值
+ */
+uint16_t set_combined_int(uint16_t value1, uint16_t value2);
 
 extern Radio radio;

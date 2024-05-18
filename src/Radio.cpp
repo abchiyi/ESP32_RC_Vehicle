@@ -426,3 +426,34 @@ esp_err_t Radio::set_data(radio_data_t *data)
              ? ESP_FAIL
              : ESP_OK;
 }
+
+channel_data_t read_channel_data(radio_data_t radio_data, int channle)
+{
+  if (channle > RADIO_CHANNEL_MAX - 1) // 超过读取最大通道数量时
+    esp_system_abort(" over RADIO_CHANNEL_MAX " + channle);
+
+  channel_data data;
+
+  data.value = radio_data.channel[channle] >> 4;
+  data.mode = radio_data.channel[channle] & 0x0F;
+  return data;
+}
+
+channel_data_int_t read_channel_data(
+    radio_data_t radio_data, int channle, bool intValue)
+{
+  if (channle > RADIO_CHANNEL_MAX - 1) // 超过读取最大通道数量时
+    esp_system_abort(" over RADIO_CHANNEL_MAX " + channle);
+
+  channel_data_int data;
+  data.value = (int16_t)radio_data.channel[channle] >> 4;
+  data.mode = radio_data.channel[channle] & 0x0F;
+  return data;
+}
+
+uint16_t set_combined_int(uint16_t value1, uint16_t value2)
+{
+  return (value1 << 4) | value2;
+}
+
+extern Radio radio;
