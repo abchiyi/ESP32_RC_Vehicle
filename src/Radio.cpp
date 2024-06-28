@@ -136,15 +136,13 @@ bool Radio::send(const T &data)
 {
   // ESP_LOGI(TAG, "Send to " MACSTR " - pd of : %d", MAC2STR(this->peer_info.peer_addr), &data);
 
-  auto status = esp_now_send(this->peer_info.peer_addr,
-                             (uint8_t *)&data, sizeof(data));
-
-  if (status == ESP_OK)
-    return true;
-
   String error_message;
-  switch (status)
+  switch (esp_now_send(
+      this->peer_info.peer_addr,
+      (uint8_t *)&data, sizeof(data)))
   {
+  case ESP_OK:
+    return true;
   case ESP_ERR_ESPNOW_NO_MEM:
     error_message = String("out of memory");
   case ESP_ERR_ESPNOW_NOT_FOUND:
@@ -192,6 +190,7 @@ void onSend(const uint8_t *mac_addr, esp_now_send_status_t status)
   {
     ESP_LOGI(TAG, "DISCONNECT with timeout");
     radio.status = RADIO_BEFORE_DISCONNECT;
+    counter_resend = 0;
   }
   // else
   //   ESP_LOGI(TAG, "Send to " MACSTR " SUCCESS", MAC2STR(mac_addr));
@@ -360,11 +359,12 @@ void TaskRadioMainLoop(void *pt)
       if (wait_response(radio.timeout_resend, &radio_data_recv))
       {
         xTimerStart(ConnectTimeoutTimer, 1);
+        vTaskDelay(1);
+        radio.send(radio_data_recv); // 回传数据
         if (xQueueSend(Q_DATA_RECV, &radio_data_recv, 1) != pdPASS)
           ;
-        radio.send(radio_data_recv); // 回传数据
       }
-      // xQueueReceive(Q_DATA_SEND, &radio_data_send, 5);
+      xQueueReceive(Q_DATA_SEND, &radio_data_send, 5);
       break;
 
     case RADIO_BEFORE_DISCONNECT:
@@ -373,9 +373,9 @@ void TaskRadioMainLoop(void *pt)
       radio.status = RADIO_DISCONNECT;
       break;
     case RADIO_DISCONNECT:
-      // if (handshake(radio.peer_info.peer_addr))
-      //   radio.status = RADIO_BEFORE_CONNECTED;
-      vTaskDelay(5);
+      if (handshake(radio.peer_info.peer_addr))
+        radio.status = RADIO_BEFORE_CONNECTED;
+      // vTaskDelay(5);
       break;
 
     default:
@@ -390,7 +390,7 @@ void Radio::begin(const char *ssid, uint8_t channel)
 {
   channel = channel;
   SSID = ssid;
-  radio.status = RADIO_DISCONNECT;
+  radio.status = RADIO_BEFORE_WAIT_CONNECTION;
   radio_data_mutex = xSemaphoreCreateMutex(); // 创建资源锁
   SEND_READY = xSemaphoreCreateBinary();
 

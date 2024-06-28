@@ -145,13 +145,15 @@ void task_vehicle_main(void *pd)
   {
     auto data = read_channel_data(radio_data, 1, true);
 
-    int v = (round((double)abs(data.value) / (double)8) * angStep); // 计算转向角度
+    // XXX 缩减转向比
+    int v = (round((double)abs(data.value) / (double)8) * angStep) * 0.4; // 计算转向角度
+    // int v = (round((double)abs(data.value) / (double)8) * angStep) * 0.5; // 计算转向角度
     auto ang = data.value < 0 ? 90 + v : data.value > 0 ? 90 - v
                                                         : 90;
 
     // ang = 180 - ang; // 对输出结果取反
     TurnServo.write(ang);
-    ESP_LOGI(TAG, "ang %d, v: %d", ang, data.value);
+    // ESP_LOGI(TAG, "ang %d, v: %d", ang, data.value);
   };
 
   auto set_motor = [&]()
