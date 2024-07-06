@@ -13,26 +13,25 @@ bool *ControllerConnected; // 连接状态
 #define PWM_DUTY_MAX int(std::pow(2, PWM_RESOLUTION) - 1) // pwm 最大占空比
 
 // 定义控制 Pin
-#define PIN_MOVE_F 17    // 前进控制
-#define PIN_MOVE_R 16    // 倒车控制
-#define CHANNEL_MOVE_F 4 // 马达驱动 pwm 通道
-#define CHANNEL_MOVE_R 5 // 马达驱动 pwm 通道
-#define PIN_TURN 18      // 转向控制
-
-#define PIN_HEADLIGHT 19       // 大灯
-#define PIN_STOPLIGHT 27       // 刹车灯
-#define PIN_STATUSLIGHT 23     // 状态灯
-#define PIN_REVERSING_LIGHT 26 // 倒车灯
-#define PIN_L_LIGHT 33         // 左转向灯
-#define PIN_R_LIGHT 25         // 右转向灯
+#define PIN_L_LIGHT 0         // 左转向灯
+#define PIN_R_LIGHT 1         // 右转向灯
+#define PIN_STOPLIGHT 2       // 刹车灯
+#define PIN_REVERSING_LIGHT 3 // 倒车灯
+#define PIN_TURN 4            // 转向
+#define PIN_MOVE_F 5          // 前进
+#define PIN_MOVE_R 6          // 倒车
+#define PIN_HEADLIGHT 19      // 大灯
+#define PIN_STATUSLIGHT NULL  // 状态灯
 
 // PWM 通道
-#define CHANNEL_LIGHT_L 2         // 左转向灯
-#define CHANNEL_LIGHT_R 3         // 右转向灯
-#define CHANNEL_HEADLIGHT 6       // 大灯PWM通道
-#define CHANNEL_STOPLIGHT 7       // 刹车灯PWM通道
-#define CHANNEL_STATUSLIGHT 1     // 状态灯
-#define CHANNEL_REVERSING_LIGHT 8 // 倒车灯PWM通道
+#define CHANNEL_MOVE_F 2          // 马达驱动F
+#define CHANNEL_MOVE_R 3          // 马达驱动R
+#define CHANNEL_LIGHT_L NULL      // 左转向灯
+#define CHANNEL_LIGHT_R NULL      // 右转向灯
+#define CHANNEL_HEADLIGHT NULL    // 大灯
+#define CHANNEL_STOPLIGHT 4       // 刹车灯
+#define CHANNEL_STATUSLIGHT NULL  // 状态灯
+#define CHANNEL_REVERSING_LIGHT 5 // 倒车灯
 
 bool DISTANT_LIGHT = false; // 远光
 bool LOW_BEAM = false;      // 近光
@@ -134,8 +133,12 @@ void task_vehicle_main(void *pd)
   static TickType_t xLastWakeTime = xTaskGetTickCount();
   radio_data_t radio_data;
 
-  setPWMPin(PIN_R_LIGHT, CHANNEL_LIGHT_R);
-  setPWMPin(PIN_L_LIGHT, CHANNEL_LIGHT_L);
+  // Motor PIN
+  setPWMPin(PIN_MOVE_F, CHANNEL_MOVE_F);
+  setPWMPin(PIN_MOVE_R, CHANNEL_MOVE_R);
+
+  // setPWMPin(PIN_R_LIGHT, CHANNEL_LIGHT_R);
+  // setPWMPin(PIN_L_LIGHT, CHANNEL_LIGHT_L);
   // setPWMPin(PIN_HEADLIGHT, CHANNEL_HEADLIGHT);
   // setPWMPin(PIN_STATUSLIGHT, CHANNEL_STATUSLIGHT);
   setPWMPin(PIN_STOPLIGHT, CHANNEL_STOPLIGHT);
@@ -227,10 +230,6 @@ void LightSetup()
 void Vehicle::begin()
 {
   LightSetup();
-
-  // 设置电调
-  setPWMPin(PIN_MOVE_F, CHANNEL_MOVE_F);
-  setPWMPin(PIN_MOVE_R, CHANNEL_MOVE_R);
 
   // 设置舵机
   pinMode(PIN_TURN, OUTPUT);

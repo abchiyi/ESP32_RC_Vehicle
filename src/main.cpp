@@ -40,9 +40,9 @@ void ISR()
 void setup()
 {
   Serial.begin(115200);
-  radio.begin(SSID, CHANNEL);
   vehicle.begin();
-  attachInterrupt(digitalPinToInterrupt(0), ISR, RISING);
+  radio.begin(SSID, CHANNEL);
+  // attachInterrupt(digitalPinToInterrupt(0), ISR, RISING);
   // xTaskCreate(taskReadBatteryVolt, "taskReadBatteryVolt", 4096, NULL, 2, NULL);
 }
 

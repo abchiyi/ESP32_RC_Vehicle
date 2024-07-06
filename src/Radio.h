@@ -11,6 +11,7 @@ typedef struct
 {
   mac_addr_t mac_addr;                 // 发送者地址
   uint16_t channel[RADIO_CHANNEL_MAX]; // 通道信息
+  bool new_addr = false;
 } radio_data_t;
 
 typedef enum radio_status

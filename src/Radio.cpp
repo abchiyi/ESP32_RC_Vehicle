@@ -262,6 +262,7 @@ bool handshake(mac_addr_t mac_addr)
 esp_err_t pairNewDevice()
 {
   mac_addr_t Host_MAC;
+  radio_data_t data;
 
   // 切换 AP 状态
   auto AP_SWITCH = [&](bool ap_switch)
@@ -279,19 +280,21 @@ esp_err_t pairNewDevice()
   };
 
   ESP_LOGI(TAG, "Wait connection");
-  if (!wait_response(PAIR_TIME_OUT, &radio_data_recv))
+  if (!wait_response(PAIR_TIME_OUT, &data))
     return ESP_FAIL;
 
   // 关闭 AP 避免被其他主机扫描到
   AP_SWITCH(false);
 
   // 接收到主机配对请求后，添加对等并回复主机
-  ESP_LOGI(TAG, "Connect Host, Mac :" MACSTR "", MAC2STR(radio_data_recv.mac_addr));
-  memcpy(Host_MAC, radio_data_recv.mac_addr, sizeof(Host_MAC)); // 获取主机地址
-  WiFi.macAddress((uint8_t *)&radio_data_recv.channel[0]);      // 写入 STA mac
-  if (!add_peer(radio_data_recv.mac_addr, CHANNEL, WIFI_IF_STA))
+  ESP_LOGI(TAG, "Connect Host, Mac :" MACSTR "", MAC2STR(data.mac_addr));
+
+  memcpy(Host_MAC, data.mac_addr, sizeof(Host_MAC)); // 获取主机地址
+  WiFi.macAddress((uint8_t *)&data.channel[0]);      // 写入 STA mac
+  data.new_addr = true;
+  if (!add_peer(data.mac_addr, CHANNEL, WIFI_IF_STA))
     return ESP_FAIL;
-  radio.send(radio_data_recv);
+  radio.send(data);
 
   /**
    * 配对期间有10次接受响应的机会，
@@ -304,8 +307,8 @@ esp_err_t pairNewDevice()
   uint8_t counter_max = 10;
   while (true)
   {
-    if (wait_response(radio.timeout_resend, &radio_data_recv))
-      if (checkMac(Host_MAC, radio_data_recv.mac_addr))
+    if (wait_response(radio.timeout_resend, &data))
+      if (checkMac(Host_MAC, data.mac_addr))
         break;
     counter++;
     if (counter >= counter_max)
@@ -316,8 +319,8 @@ esp_err_t pairNewDevice()
    * 在配对过程中通道 0 有数据主机则认为从机引导主机配对至STA模式地址，则发送前
    * 需清空通道 0， 清除发送数据内的mac地址
    */
-  memset(&radio_data_recv, 0, sizeof(radio_data_recv));
-  radio.send(radio_data_recv);
+  memset(&data, 0, sizeof(data));
+  radio.send(data);
   return ESP_OK;
 };
 
