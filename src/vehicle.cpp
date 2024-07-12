@@ -129,20 +129,7 @@ void TaskIndicatorLight(void *pt)
 // 车辆控制主任务
 void task_vehicle_main(void *pd)
 {
-  const static TickType_t xFrequency = pdMS_TO_TICKS(8);
-  static TickType_t xLastWakeTime = xTaskGetTickCount();
   radio_data_t radio_data;
-
-  // Motor PIN
-  setPWMPin(PIN_MOVE_F, CHANNEL_MOVE_F);
-  setPWMPin(PIN_MOVE_R, CHANNEL_MOVE_R);
-
-  // setPWMPin(PIN_R_LIGHT, CHANNEL_LIGHT_R);
-  // setPWMPin(PIN_L_LIGHT, CHANNEL_LIGHT_L);
-  // setPWMPin(PIN_HEADLIGHT, CHANNEL_HEADLIGHT);
-  // setPWMPin(PIN_STATUSLIGHT, CHANNEL_STATUSLIGHT);
-  setPWMPin(PIN_STOPLIGHT, CHANNEL_STOPLIGHT);
-  setPWMPin(PIN_REVERSING_LIGHT, CHANNEL_REVERSING_LIGHT);
 
   auto set_servo = [&]()
   {
@@ -168,22 +155,22 @@ void task_vehicle_main(void *pd)
 
     switch (gear) // 读取挡位
     {
-    case R:
+    case REVERSE:
       ledcWrite(CHANNEL_MOVE_R, data.value);
       ledcWrite(CHANNEL_MOVE_F, 0);
       break;
 
-    case D:
+    case FORWARD:
       ledcWrite(CHANNEL_MOVE_F, data.value);
       ledcWrite(CHANNEL_MOVE_R, 0);
       break;
 
-    case N:
+    case SLIDE:
       ledcWrite(CHANNEL_MOVE_R, 0);
       ledcWrite(CHANNEL_MOVE_F, 0);
       break;
 
-    case B:
+    case BRAKE:
       ledcWrite(CHANNEL_MOVE_F, PWM_DUTY_MAX);
       ledcWrite(CHANNEL_MOVE_R, PWM_DUTY_MAX);
       break;
@@ -196,23 +183,20 @@ void task_vehicle_main(void *pd)
     }
 
     // 倒车灯
-    ledcWrite(CHANNEL_REVERSING_LIGHT, gear == R ? 150 : 0);
+    ledcWrite(CHANNEL_REVERSING_LIGHT, gear == REVERSE ? 1023 : 0);
     // 刹车灯
-    ledcWrite(CHANNEL_STOPLIGHT, brake ? 150 : 0);
+    ledcWrite(CHANNEL_STOPLIGHT, brake ? 1023 : 0);
 
     // ESP_LOGI(TAG, "g %d, v %d, b : %d", gear, data.value, brake);
   };
 
   while (true)
   {
-    if (radio.get_data(&radio_data) != ESP_OK)
-      continue; // 未获取到数据时跳过循环
-
-    // 转向机动
-    set_motor();
-    set_servo();
-
-    vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    if (radio.get_data(&radio_data) == ESP_OK)
+    {
+      set_motor();
+      set_servo();
+    }
   }
 }
 
@@ -223,7 +207,7 @@ void LightSetup()
   // xTaskCreate(TaskLight, "TaskHeadlight", 1024, NULL, 3, NULL);
   // xTaskCreate(TaskStatusLight, "TaskStatusLight", 1024, NULL, 3, NULL);
   // xTaskCreate(TaskLightControll, "TaskHeadlightControll", 1024, NULL, 3, NULL);
-  // xTaskCreate(TaskIndicatorLight, "Indicator Light", 1024, NULL, 3, NULL);
+  xTaskCreate(TaskIndicatorLight, "Indicator Light", 1024, NULL, 3, NULL);
   // xTaskCreate(TaskIndicatorLightControl, "IndicatorLightControl", 1024, NULL, 3, NULL);
 }
 
@@ -235,6 +219,17 @@ void Vehicle::begin()
   pinMode(PIN_TURN, OUTPUT);
   TurnServo.setPeriodHertz(50);
   TurnServo.attach(PIN_TURN, 50, 2500);
+
+  // Motor PIN
+  setPWMPin(PIN_MOVE_F, CHANNEL_MOVE_F);
+  setPWMPin(PIN_MOVE_R, CHANNEL_MOVE_R);
+
+  // setPWMPin(PIN_R_LIGHT, CHANNEL_LIGHT_R);
+  // setPWMPin(PIN_L_LIGHT, CHANNEL_LIGHT_L);
+  // setPWMPin(PIN_HEADLIGHT, CHANNEL_HEADLIGHT);
+  // setPWMPin(PIN_STATUSLIGHT, CHANNEL_STATUSLIGHT);
+  setPWMPin(PIN_STOPLIGHT, CHANNEL_STOPLIGHT);
+  setPWMPin(PIN_REVERSING_LIGHT, CHANNEL_REVERSING_LIGHT);
 
   xTaskCreate(task_vehicle_main, "Vehicle main task", 1024 * 4, NULL, 1, NULL);
 }

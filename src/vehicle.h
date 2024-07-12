@@ -1,12 +1,12 @@
 #include <Arduino.h>
 
 // 挡位状态
-typedef enum
+typedef enum gear
 {
-  R, // REVERSE
-  D, // FORWARD
-  N, // SLIDE
-  B, // BRAKE
+  SLIDE,
+  BRAKE,
+  REVERSE,
+  FORWARD
 } gear_t;
 
 #define BRAKE_RT 1
