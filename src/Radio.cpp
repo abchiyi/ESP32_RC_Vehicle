@@ -343,17 +343,17 @@ void TaskRadioMainLoop(void *pt)
         break;
 
       if (wait_response(radio.timeout_resend, &radio_data_recv))
-      {
-        if (xQueueSend(Q_DATA_RECV, &radio_data_recv, 1) != pdPASS)
-          ;
-        // 回传数据
-        xQueueReceive(Q_DATA_SEND, &radio_data_send, 1);
-        radio.send(radio_data_send);
-      }
+        ;
+      xQueueReceive(Q_DATA_SEND, &radio_data_send, 1);
+      if (radio.__onRecv)
+        radio.__onRecv(radio_data_recv);
+      radio.send(radio_data_send);
+
       break;
 
     case RADIO_BEFORE_DISCONNECT:
-      // TODO 断联回调（例如失控保护）
+      if (radio.onDisconnect) // 执行断联回调
+        radio.onDisconnect();
       ESP_LOGI(TAG, "RADIO_DISCONNECT");
       radio.status = RADIO_DISCONNECT;
       break;

@@ -13,15 +13,15 @@ bool *ControllerConnected; // 连接状态
 #define PWM_DUTY_MAX int(std::pow(2, PWM_RESOLUTION) - 1) // pwm 最大占空比
 
 // 定义控制 Pin
-#define PIN_L_LIGHT 0         // 左转向灯
-#define PIN_R_LIGHT 1         // 右转向灯
-#define PIN_STOPLIGHT 2       // 刹车灯
-#define PIN_REVERSING_LIGHT 3 // 倒车灯
-#define PIN_TURN 4            // 转向
-#define PIN_MOVE_F 5          // 前进
-#define PIN_MOVE_R 6          // 倒车
-#define PIN_HEADLIGHT 19      // 大灯
-#define PIN_STATUSLIGHT NULL  // 状态灯
+#define PIN_L_LIGHT 0          // 左转向灯
+#define PIN_R_LIGHT 1          // 右转向灯
+#define PIN_STOPLIGHT 2        // 刹车灯
+#define PIN_REVERSING_LIGHT 10 // 倒车灯
+#define PIN_TURN 4             // 转向
+#define PIN_MOVE_F 5           // 前进
+#define PIN_MOVE_R 6           // 倒车
+#define PIN_HEADLIGHT 19       // 大灯
+#define PIN_STATUSLIGHT NULL   // 状态灯
 
 // PWM 通道
 #define CHANNEL_MOVE_F 2          // 马达驱动F
@@ -50,7 +50,7 @@ const double angStep = 90.00 / 256.00; // 转向°步长
 void setPWMPin(int pin, int pwmChannel)
 {
   pinMode(pin, OUTPUT);
-  ledcSetup(pwmChannel, 2000, 10); //  freq 2000 10bit 0 ~ 1023;
+  ledcSetup(pwmChannel, 20000, 10); //  freq 2000 10bit 0 ~ 1023;
   ledcAttachPin(pin, pwmChannel);
 }
 
@@ -127,9 +127,8 @@ void TaskIndicatorLight(void *pt)
 }
 
 // 车辆控制主任务
-void task_vehicle_main(void *pd)
+void task_vehicle_main(radio_data_t radio_data)
 {
-  radio_data_t radio_data;
 
   auto set_servo = [&]()
   {
@@ -189,15 +188,8 @@ void task_vehicle_main(void *pd)
 
     // ESP_LOGI(TAG, "g %d, v %d, b : %d", gear, data.value, brake);
   };
-
-  while (true)
-  {
-    if (radio.get_data(&radio_data) == ESP_OK)
-    {
-      set_motor();
-      set_servo();
-    }
-  }
+  set_motor();
+  set_servo();
 }
 
 /* 设置灯光任务 */
@@ -213,6 +205,17 @@ void LightSetup()
 
 void Vehicle::begin()
 {
+
+  radio.onDisconnect = [&]()
+  {
+    ESP_LOGI(TAG, "RADIO_DISCONNECT STOP !!!!!");
+    TurnServo.write(90);
+    ledcWrite(CHANNEL_MOVE_F, PWM_DUTY_MAX);
+    ledcWrite(CHANNEL_MOVE_R, PWM_DUTY_MAX);
+  };
+
+  radio.__onRecv = task_vehicle_main;
+
   LightSetup();
 
   // 设置舵机
@@ -228,8 +231,8 @@ void Vehicle::begin()
   // setPWMPin(PIN_L_LIGHT, CHANNEL_LIGHT_L);
   // setPWMPin(PIN_HEADLIGHT, CHANNEL_HEADLIGHT);
   // setPWMPin(PIN_STATUSLIGHT, CHANNEL_STATUSLIGHT);
-  setPWMPin(PIN_STOPLIGHT, CHANNEL_STOPLIGHT);
-  setPWMPin(PIN_REVERSING_LIGHT, CHANNEL_REVERSING_LIGHT);
+  // setPWMPin(PIN_STOPLIGHT, CHANNEL_STOPLIGHT);
+  // setPWMPin(PIN_REVERSING_LIGHT, CHANNEL_REVERSING_LIGHT);
 
-  xTaskCreate(task_vehicle_main, "Vehicle main task", 1024 * 4, NULL, 1, NULL);
+  // xTaskCreate(task_vehicle_main, "Vehicle main task", 1024 * 4, NULL, 1, NULL);
 }

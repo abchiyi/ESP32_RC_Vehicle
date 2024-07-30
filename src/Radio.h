@@ -1,4 +1,5 @@
 #include <esp_now.h>
+#include "functional"
 
 #define RADIO_CHANNEL_MAX 8 // 最大控制通道数量
 
@@ -46,6 +47,9 @@ public:
 
   esp_err_t get_data(radio_data_t *data); // 读取收到的数据
   esp_err_t set_data(radio_data_t *data); // 设置要发送的数据
+
+  std::function<void()> onDisconnect = NULL;
+  std::function<void(radio_data_t)> __onRecv = NULL;
 
   /**
    * freeRTOS 在esp32 一个 tick 为 1ms
