@@ -37,12 +37,14 @@ void ISR()
     radio.status = RADIO_BEFORE_WAIT_CONNECTION;
 };
 
+#define BUTTON_BOOT 9
+
 void setup()
 {
   Serial.begin(115200);
   vehicle.begin();
   radio.begin(SSID, CHANNEL);
-  // attachInterrupt(digitalPinToInterrupt(0), ISR, RISING);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_BOOT), ISR, RISING);
   // xTaskCreate(taskReadBatteryVolt, "taskReadBatteryVolt", 4096, NULL, 2, NULL);
 }
 

@@ -43,10 +43,11 @@ public:
   bool send(const T &data);                      // 发送数据
   void initRadio();                              // 初始化无线
   void begin(const char *ssid, uint8_t channel); // 启动无线
+  void config_clear();                           // 清除配置
+  void confgi_save();                            // 保存配置
+  mac_t HOST_MAC;                                // 主机地址
 
-  esp_err_t get_data(radio_data_t *data); // 读取收到的数据
-  esp_err_t set_data(radio_data_t *data); // 设置要发送的数据
-
+  /** 回调函数 */
   std::function<void()> onDisconnect = NULL;
   std::function<void(radio_data_t)> __onRecv = NULL;
 
@@ -54,9 +55,8 @@ public:
    * freeRTOS 在esp32 一个 tick 为 1ms
    * 以下定义的超时值单位为 1ms
    */
-  uint8_t timeout_resend = 50;      // 超时重发
-  uint8_t resend_count = 5;         // 超时重发次数
-  uint8_t timeout_disconnect = 250; // 超时断开连接
+  uint8_t resend_count = 5;    // 超时重发次数
+  uint8_t timeout_resend = 50; // 超时重发
 };
 
 typedef struct channel_data

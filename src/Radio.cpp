@@ -6,6 +6,7 @@
 #include <esp_err.h>
 #include <esp_mac.h>
 #include <vector>
+#include "tool.h"
 
 #define TAG "Radio"
 
@@ -14,8 +15,9 @@ uint8_t CHANNEL; // 通讯频道
 radio_data_t radio_data_recv;
 radio_data_t radio_data_send;
 
-SemaphoreHandle_t radio_data_mutex;  // 资源锁
-SemaphoreHandle_t SEND_READY = NULL; // 允许发送
+/******** 储存配置命名 ********/
+#define STORGE_NAME_SPACE "RADIO_CONFIG" // 储存命名空间
+#define STORGE_LAST_DEVICE "HOST_ADDR"   // 最后连接的设备
 
 // 接收数据队列
 QueueHandle_t Q_RECV_DATA = xQueueCreate(2, sizeof(radio_data_t));
@@ -34,20 +36,6 @@ QueueHandle_t Q_ACK = xQueueCreate(2, sizeof(mac_t));
 bool wait_response(TickType_t waitTick, radio_data_t *data)
 {
   if (xQueueReceive(Q_RECV_DATA, data, waitTick) != pdPASS)
-  {
-    ESP_LOGI(TAG, "Wait for response timed out");
-    return false;
-  }
-  return true;
-};
-
-/**
- * @brief 等待主机握手
- * @param waitTick 超时等待
- */
-bool wait_response(TickType_t waitTick)
-{
-  if (xSemaphoreTake(SEND_READY, waitTick) != pdTRUE)
   {
     ESP_LOGI(TAG, "Wait for response timed out");
     return false;
@@ -251,18 +239,29 @@ esp_err_t handshake(mac_t *mac_addr)
 {
   radio_data_t data;
   ESP_LOGI(TAG, "wait handshake");
-  ESP_LOGI(TAG, "step 1");
   // 2次握手请求，每次重试3次，均无响应握手失败
   for (size_t i = 0; i < 3; i++) // S <- M
   {
     if (wait_response(portMAX_DELAY, &data))
     {
-      *mac_addr = data.mac_addr;
+      // 仅在等待连接模式下可以设置主机地址
+      if (radio.status == RADIO_WAIT_CONNECTION)
+        *mac_addr = data.mac_addr;
+
+      if (data.mac_addr != radio.HOST_MAC)
+      {
+        ESP_LOGI(TAG,
+                 "Get mac : " MACSTR ", HOST_MAC " MACSTR "",
+                 MAC2STR(data.mac_addr),
+                 MAC2STR(radio.HOST_MAC));
+        return ESP_ERR_INVALID_MAC;
+      }
+
       add_peer(data.mac_addr, 1);
       break;
     }
     if (i >= 3)
-      return false;
+      return ESP_ERR_TIMEOUT;
   }
   for (size_t i = 0; i < 3; i++) // S -> M
   {
@@ -271,7 +270,7 @@ esp_err_t handshake(mac_t *mac_addr)
     if (wait_ACK(radio.timeout_resend, *mac_addr))
       break;
     if (i >= 3)
-      return false;
+      return ESP_ERR_TIMEOUT;
   }
 
   ESP_LOGI(TAG, "Pair to Host success");
@@ -280,12 +279,11 @@ esp_err_t handshake(mac_t *mac_addr)
 
 esp_err_t pairNewDevice()
 {
-  mac_t Host_MAC;
   ESP_LOGI(TAG, "Wait connection");
-  if (handshake(&Host_MAC) == ESP_OK)
-    return ESP_OK;
-  else
+  if (handshake(&radio.HOST_MAC) == ESP_FAIL)
     return ESP_FAIL;
+  radio.confgi_save();
+  return ESP_OK;
 };
 
 void TaskRadioMainLoop(void *pt)
@@ -295,7 +293,7 @@ void TaskRadioMainLoop(void *pt)
     switch (radio.status)
     {
     case RADIO_BEFORE_WAIT_CONNECTION:
-      if (!WiFi.softAP(radio.SSID))
+      if (!WiFi.softAP(radio.SSID, "", 1, 0, 1, true))
       {
         ESP_LOGE(TAG, "AP Config failed.");
         break;
@@ -357,32 +355,23 @@ void Radio::begin(const char *ssid, uint8_t channel)
 {
   channel = channel;
   SSID = ssid;
-  radio.status = RADIO_BEFORE_WAIT_CONNECTION;
-  radio_data_mutex = xSemaphoreCreateMutex(); // 创建资源锁
-  SEND_READY = xSemaphoreCreateBinary();
+  radio.status = RADIO_DISCONNECT;
 
   this->initRadio();
+  nvs_call(STORGE_NAME_SPACE,
+           [&](Preferences &prefs)
+           {
+             prefs.getBytes(STORGE_LAST_DEVICE, &HOST_MAC, sizeof(HOST_MAC));
+           });
+  ESP_LOGI(TAG, "Targe host mac " MACSTR "", MAC2STR(HOST_MAC));
+
+  // 开启AP
+  if (!WiFi.softAP(radio.SSID, "", 1, 0, 1, true))
+    ESP_LOGE(TAG, "AP Config failed.");
+
+  ESP_LOGI(TAG, "AP Config Success.SSID: %s , MAC : %s, CHANNEL : %d", radio.SSID, WiFi.softAPmacAddress().c_str(), WiFi.channel());
+
   xTaskCreate(TaskRadioMainLoop, "TaskRadioMainLoop", 4096, NULL, 24, NULL);
-}
-
-/**
- * @brief 获取收到的数据
- */
-esp_err_t Radio::get_data(radio_data_t *data)
-{
-  return xQueueReceive(Q_DATA_RECV, data, portMAX_DELAY) != pdPASS
-             ? ESP_FAIL
-             : ESP_OK;
-}
-
-/**
- * @brief 设置要发送的数据
- */
-esp_err_t Radio::set_data(radio_data_t *data)
-{
-  return xQueueSend(Q_DATA_SEND, data, radio.timeout_resend) != pdTRUE
-             ? ESP_FAIL
-             : ESP_OK;
 }
 
 channel_data_t read_channel_data(radio_data_t radio_data, int channle)
@@ -412,6 +401,23 @@ channel_data_int_t read_channel_data(
 uint16_t set_combined_int(uint16_t value1, uint16_t value2)
 {
   return (value1 << 4) | value2;
+}
+
+void Radio::confgi_save()
+{
+  ESP_LOGI(TAG, "Save confgi");
+  nvs_call(STORGE_NAME_SPACE, [&](Preferences &prefs)
+           { prefs.putBytes(
+                 STORGE_LAST_DEVICE,
+                 &HOST_MAC,
+                 sizeof(mac_t)); });
+};
+
+void Radio::config_clear()
+{
+  ESP_LOGI(TAG, "Clear confgi");
+  nvs_call(STORGE_NAME_SPACE, [](Preferences &prefs)
+           { prefs.clear(); });
 }
 
 extern Radio radio;
