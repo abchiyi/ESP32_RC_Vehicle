@@ -9,9 +9,6 @@
 
 #define TAG "Radio"
 
-#define PASSWORD "--------"
-#define PAIR_TIME_OUT 60000 // 配对等待时间 /ms
-
 Radio radio;
 uint8_t CHANNEL; // 通讯频道
 radio_data_t radio_data_recv;
@@ -26,6 +23,8 @@ QueueHandle_t Q_RECV_DATA = xQueueCreate(2, sizeof(radio_data_t));
 // 向下数据队列，将处理后的数据发布到下级任务
 QueueHandle_t Q_DATA_RECV = xQueueCreate(3, sizeof(radio_data_t));
 QueueHandle_t Q_DATA_SEND = xQueueCreate(2, sizeof(radio_data_t));
+
+QueueHandle_t Q_ACK = xQueueCreate(2, sizeof(mac_t));
 
 /**
  * @brief 等待主机握手
@@ -56,12 +55,21 @@ bool wait_response(TickType_t waitTick)
   return true;
 };
 
-// 对比 mac地址是否一致
-bool checkMac(mac_addr_t mac1, mac_addr_t mac2)
+bool wait_ACK(TickType_t waitTick, mac_t mac)
 {
-  if (memcmp(mac1, mac2, sizeof(mac_addr_t)) == 0)
-    return true;
-  return false;
+  mac_t temp_mac;
+  if (xQueueReceive(Q_ACK, &temp_mac, waitTick) != pdPASS)
+  {
+    ESP_LOGI(TAG, "Wait for ACK timed out");
+    return false;
+  }
+  if (mac != temp_mac)
+  {
+    ESP_LOGI(TAG, "temp mac " MACSTR ", MAC " MACSTR "",
+             MAC2STR(temp_mac), MAC2STR(mac));
+    return wait_ACK(waitTick, mac);
+  }
+  return true;
 };
 
 /**
@@ -71,14 +79,14 @@ bool checkMac(mac_addr_t mac1, mac_addr_t mac2)
  * @param ifidx 要使用的wifi接口用于收发数据
  */
 bool add_peer(
-    mac_addr_t macaddr,
+    mac_t macaddr,
     uint8_t channel,
     wifi_interface_t ifidx = WIFI_IF_STA)
 {
   // ESP_LOGI(TAG, "Pair to " MACSTR "", MAC2STR(macaddr));
   auto peer_info = &radio.peer_info;
   memset(peer_info, 0, sizeof(esp_now_peer_info_t)); // 清空对象
-  memcpy(peer_info->peer_addr, macaddr, ESP_NOW_ETH_ALEN);
+  memcpy(peer_info->peer_addr, macaddr.data(), ESP_NOW_ETH_ALEN);
   peer_info->channel = channel;
   peer_info->encrypt = false;
   peer_info->ifidx = ifidx;
@@ -131,12 +139,25 @@ bool Radio::send(const T &data)
     return true;
   case ESP_ERR_ESPNOW_NO_MEM:
     error_message = String("out of memory");
+    break;
   case ESP_ERR_ESPNOW_NOT_FOUND:
     error_message = String("peer is not found");
+    break;
   case ESP_ERR_ESPNOW_IF:
     error_message = String("current WiFi interface doesn't match that of peer");
+    break;
+  case ESP_ERR_ESPNOW_NOT_INIT:
+    error_message = String("ESPNOW is not initialized");
+    break;
+  case ESP_ERR_ESPNOW_ARG:
+    error_message = String("invalid argument");
+    break;
+  case ESP_ERR_ESPNOW_INTERNAL:
+    error_message = String("internal error");
+    break;
   default:
     error_message = String("Send fail");
+    break;
   }
 
   ESP_LOGI(TAG, "Send to " MACSTR " - %s",
@@ -149,12 +170,8 @@ void onRecv(const uint8_t *mac, const uint8_t *incomingData, int len)
 {
   memcpy(&radio_data_recv, incomingData, sizeof(radio_data_recv));
   memcpy(&radio_data_recv.mac_addr, mac, sizeof(radio_data_recv.mac_addr));
-  if (xQueueSend(Q_RECV_DATA, &radio_data_recv, 10) != pdPASS)
+  if (xQueueSend(Q_RECV_DATA, &radio_data_recv, 1) != pdPASS)
     ;
-
-  // ESP_LOGI(TAG, "Queue is full.");
-  // else
-  //   ESP_LOGI(TAG, "Queue is add.");
 }
 
 // 发送回调
@@ -162,13 +179,17 @@ void onSend(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
   static uint8_t counter_resend = 0;
 
-  if (status)
+  if (status == ESP_NOW_SEND_SUCCESS)
+  {
+    counter_resend = 0;
+    if (xQueueSend(Q_ACK, mac_addr, 1) != pdPASS)
+      ;
+  }
+  else
   {
     ESP_LOGI(TAG, "Send to " MACSTR " FAIl", MAC2STR(mac_addr));
     counter_resend++;
   }
-  else
-    counter_resend = 0;
 
   if (counter_resend >= radio.resend_count &&
       radio.status != RADIO_DISCONNECT &&
@@ -226,88 +247,45 @@ void Radio::initRadio()
 /**
  * @brief 与指定地址握手
  */
-bool handshake(mac_addr_t mac_addr)
+esp_err_t handshake(mac_t *mac_addr)
 {
-  // radio_data_t data;
+  radio_data_t data;
   ESP_LOGI(TAG, "wait handshake");
-  if (!wait_response(radio.timeout_resend, &radio_data_recv))
-    return false;
-
-  // TODO 掉电后无法设置正确 mac 地址导致重连失败
-  if (checkMac(mac_addr, radio_data_recv.mac_addr))
+  ESP_LOGI(TAG, "step 1");
+  // 2次握手请求，每次重试3次，均无响应握手失败
+  for (size_t i = 0; i < 3; i++) // S <- M
   {
-    memset(&radio_data_recv, 0, sizeof(radio_data_recv));
-    radio.send(radio_data_recv);
-    return true;
+    if (wait_response(portMAX_DELAY, &data))
+    {
+      *mac_addr = data.mac_addr;
+      add_peer(data.mac_addr, 1);
+      break;
+    }
+    if (i >= 3)
+      return false;
+  }
+  for (size_t i = 0; i < 3; i++) // S -> M
+  {
+    if (!radio.send(data))
+      continue;
+    if (wait_ACK(radio.timeout_resend, *mac_addr))
+      break;
+    if (i >= 3)
+      return false;
   }
 
-  ESP_LOGI(TAG, "Host :" MACSTR " not paired \n", MAC2STR(radio_data_recv.mac_addr));
-  return false;
+  ESP_LOGI(TAG, "Pair to Host success");
+  return ESP_OK;
 }
 
 esp_err_t pairNewDevice()
 {
-  mac_addr_t Host_MAC;
-  radio_data_t data;
-
-  // 切换 AP 状态
-  auto AP_SWITCH = [&](bool ap_switch)
-  {
-    if (ap_switch)
-    {
-      ESP_LOGI(TAG, "AP ON");
-      WiFi.enableAP(true);
-    }
-    else
-    {
-      ESP_LOGI(TAG, "AP OFF");
-      WiFi.enableAP(false);
-    }
-  };
-
+  mac_t Host_MAC;
   ESP_LOGI(TAG, "Wait connection");
-  if (!wait_response(PAIR_TIME_OUT, &data))
+  if (handshake(&Host_MAC) == ESP_OK)
+    return ESP_OK;
+  else
     return ESP_FAIL;
-
-  // 关闭 AP 避免被其他主机扫描到
-  AP_SWITCH(false);
-
-  // 接收到主机配对请求后，添加对等并回复主机
-  ESP_LOGI(TAG, "Connect Host, Mac :" MACSTR "", MAC2STR(data.mac_addr));
-
-  memcpy(Host_MAC, data.mac_addr, sizeof(Host_MAC)); // 获取主机地址
-  WiFi.macAddress((uint8_t *)&data.channel[0]);      // 写入 STA mac
-  data.new_addr = true;
-  if (!add_peer(data.mac_addr, CHANNEL, WIFI_IF_STA))
-    return ESP_FAIL;
-  radio.send(data);
-
-  /**
-   * 配对期间有10次接受响应的机会，
-   * 当全部不是来自目标主机的响应时判断配对失败
-   * 等待目标主机第一次响应,
-   */
-  ESP_LOGI(TAG, "Wait Host response to STA");
-  uint8_t counter = 0;
-  // 接收数据响应次数&总超时时间 radio.timeout *  counter_max
-  uint8_t counter_max = 10;
-  while (true)
-  {
-    if (wait_response(radio.timeout_resend, &data))
-      if (checkMac(Host_MAC, data.mac_addr))
-        break;
-    counter++;
-    if (counter >= counter_max)
-      ESP_LOGI(TAG, "Pair time out, no host to pair");
-    return ESP_FAIL;
-  }
-  /**
-   * 在配对过程中通道 0 有数据主机则认为从机引导主机配对至STA模式地址，则发送前
-   * 需清空通道 0， 清除发送数据内的mac地址
-   */
-  memset(&data, 0, sizeof(data));
-  radio.send(data);
-  return ESP_OK;
 };
 
 void TaskRadioMainLoop(void *pt)
@@ -317,7 +295,7 @@ void TaskRadioMainLoop(void *pt)
     switch (radio.status)
     {
     case RADIO_BEFORE_WAIT_CONNECTION:
-      if (!WiFi.softAP(radio.SSID, PASSWORD, CHANNEL, 0))
+      if (!WiFi.softAP(radio.SSID))
       {
         ESP_LOGE(TAG, "AP Config failed.");
         break;
@@ -358,8 +336,13 @@ void TaskRadioMainLoop(void *pt)
       radio.status = RADIO_DISCONNECT;
       break;
     case RADIO_DISCONNECT:
-      if (handshake(radio.peer_info.peer_addr))
-        radio.status = RADIO_BEFORE_CONNECTED;
+      [&]()
+      {
+        mac_t mac;
+        memcpy(&mac, radio.peer_info.peer_addr, ESP_NOW_ETH_ALEN);
+        if (handshake(&mac) == ESP_OK)
+          radio.status = RADIO_BEFORE_CONNECTED;
+      }();
       break;
 
     default:

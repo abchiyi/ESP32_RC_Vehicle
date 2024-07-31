@@ -3,6 +3,7 @@
 #include <esp_log.h>
 #include <Radio.h>
 #include "math.h"
+#include "pins.h"
 
 #define TAG "vehicle"
 
@@ -11,17 +12,6 @@ bool *ControllerConnected; // 连接状态
 
 #define PWM_RESOLUTION 10                                 // pwm 分辨率
 #define PWM_DUTY_MAX int(std::pow(2, PWM_RESOLUTION) - 1) // pwm 最大占空比
-
-// 定义控制 Pin
-#define PIN_L_LIGHT 0          // 左转向灯
-#define PIN_R_LIGHT 1          // 右转向灯
-#define PIN_STOPLIGHT 2        // 刹车灯
-#define PIN_REVERSING_LIGHT 10 // 倒车灯
-#define PIN_TURN 4             // 转向
-#define PIN_MOVE_F 5           // 前进
-#define PIN_MOVE_R 6           // 倒车
-#define PIN_HEADLIGHT 19       // 大灯
-#define PIN_STATUSLIGHT NULL   // 状态灯
 
 // PWM 通道
 #define CHANNEL_MOVE_F 2          // 马达驱动F
@@ -50,8 +40,9 @@ const double angStep = 90.00 / 256.00; // 转向°步长
 void setPWMPin(int pin, int pwmChannel)
 {
   pinMode(pin, OUTPUT);
-  ledcSetup(pwmChannel, 20000, 10); //  freq 2000 10bit 0 ~ 1023;
+  ledcSetup(pwmChannel, 30000, 10); // 10bit 0 ~ 1023;
   ledcAttachPin(pin, pwmChannel);
+  ledcWrite(pwmChannel, 0);
 }
 
 /* 状态灯任务 */
@@ -210,8 +201,8 @@ void Vehicle::begin()
   {
     ESP_LOGI(TAG, "RADIO_DISCONNECT STOP !!!!!");
     TurnServo.write(90);
-    ledcWrite(CHANNEL_MOVE_F, PWM_DUTY_MAX);
-    ledcWrite(CHANNEL_MOVE_R, PWM_DUTY_MAX);
+    ledcWrite(CHANNEL_MOVE_F, 0);
+    ledcWrite(CHANNEL_MOVE_R, 0);
   };
 
   radio.__onRecv = task_vehicle_main;
@@ -219,13 +210,32 @@ void Vehicle::begin()
   LightSetup();
 
   // 设置舵机
-  pinMode(PIN_TURN, OUTPUT);
+  pinMode(PIN_SERVO, OUTPUT);
   TurnServo.setPeriodHertz(50);
-  TurnServo.attach(PIN_TURN, 50, 2500);
+  TurnServo.attach(PIN_SERVO, 50, 2500);
 
   // Motor PIN
-  setPWMPin(PIN_MOVE_F, CHANNEL_MOVE_F);
-  setPWMPin(PIN_MOVE_R, CHANNEL_MOVE_R);
+  setPWMPin(PIN_MOTOR_F, CHANNEL_MOVE_F);
+  setPWMPin(PIN_MOTOR_R, CHANNEL_MOVE_R);
+
+  // int count = 35;
+  // for (size_t i = 0; i < count; i++)
+  // {
+  //   ledcSetup(CHANNEL_MOVE_F, i * 100, 10);
+  //   ledcWrite(CHANNEL_MOVE_F, 50);
+  //   vTaskDelay(50);
+  //   ledcWrite(CHANNEL_MOVE_F, 0);
+  //   ledcWrite(CHANNEL_MOVE_R, 0);
+  //   vTaskDelay(100);
+  //   ESP_LOGI(TAG, "%d", i);
+  // }
+  // setPWMPin(PIN_MOTOR_F, CHANNEL_MOVE_F);
+
+  // delay(100);
+  // ledcWrite(CHANNEL_MOVE_F, 0);
+  // delay(100);
+  // ledcWrite(CHANNEL_MOVE_F, 255);
+  // delay(100);
 
   // setPWMPin(PIN_R_LIGHT, CHANNEL_LIGHT_R);
   // setPWMPin(PIN_L_LIGHT, CHANNEL_LIGHT_L);
