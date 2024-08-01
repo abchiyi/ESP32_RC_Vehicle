@@ -53,7 +53,7 @@ bool wait_ACK(TickType_t waitTick, mac_t mac)
   }
   if (mac != temp_mac)
   {
-    ESP_LOGI(TAG, "temp mac " MACSTR ", MAC " MACSTR "",
+    ESP_LOGI(TAG, "ACK " MACSTR ", targer " MACSTR "",
              MAC2STR(temp_mac), MAC2STR(mac));
     return wait_ACK(waitTick, mac);
   }
@@ -235,18 +235,21 @@ void Radio::initRadio()
 /**
  * @brief 与指定地址握手
  */
-esp_err_t handshake(mac_t *mac_addr)
+esp_err_t handshake()
 {
   radio_data_t data;
   ESP_LOGI(TAG, "wait handshake");
   // 2次握手请求，每次重试3次，均无响应握手失败
-  for (size_t i = 0; i < 3; i++) // S <- M
+  for (size_t i = 1; i <= 3; i++) // S <- M
   {
-    if (wait_response(portMAX_DELAY, &data))
+    if (wait_response(radio.status == RADIO_WAIT_CONNECTION
+                          ? portMAX_DELAY
+                          : radio.timeout_resend,
+                      &data))
     {
       // 仅在等待连接模式下可以设置主机地址
       if (radio.status == RADIO_WAIT_CONNECTION)
-        *mac_addr = data.mac_addr;
+        radio.HOST_MAC = data.mac_addr;
 
       if (data.mac_addr != radio.HOST_MAC)
       {
@@ -257,30 +260,28 @@ esp_err_t handshake(mac_t *mac_addr)
         return ESP_ERR_INVALID_MAC;
       }
 
-      add_peer(data.mac_addr, 1);
-      break;
+      add_peer(data.mac_addr, WiFi.channel());
+      // 第二次握手
+      for (size_t i = 0; i < 3; i++) // S -> M
+      {
+        if (!radio.send(data))
+          continue;
+        if (wait_ACK(radio.timeout_resend, radio.HOST_MAC))
+        {
+          ESP_LOGI(TAG, "Pair to Host success");
+          return ESP_OK;
+        }
+      }
     }
-    if (i >= 3)
-      return ESP_ERR_TIMEOUT;
-  }
-  for (size_t i = 0; i < 3; i++) // S -> M
-  {
-    if (!radio.send(data))
-      continue;
-    if (wait_ACK(radio.timeout_resend, *mac_addr))
-      break;
-    if (i >= 3)
-      return ESP_ERR_TIMEOUT;
   }
 
-  ESP_LOGI(TAG, "Pair to Host success");
-  return ESP_OK;
+  return ESP_ERR_TIMEOUT;
 }
 
 esp_err_t pairNewDevice()
 {
   ESP_LOGI(TAG, "Wait connection");
-  if (handshake(&radio.HOST_MAC) == ESP_FAIL)
+  if (handshake() == ESP_FAIL)
     return ESP_FAIL;
   radio.confgi_save();
   return ESP_OK;
@@ -318,8 +319,11 @@ void TaskRadioMainLoop(void *pt)
       if (radio.status != RADIO_CONNECTED)
         break;
 
+      /* 过滤不是来自主机的数据 */
       if (wait_response(radio.timeout_resend, &radio_data_recv))
-        ;
+        if (radio_data_recv.mac_addr != radio.HOST_MAC)
+          break;
+
       xQueueReceive(Q_DATA_SEND, &radio_data_send, 1);
       if (radio.__onRecv)
         radio.__onRecv(radio_data_recv);
@@ -336,10 +340,17 @@ void TaskRadioMainLoop(void *pt)
     case RADIO_DISCONNECT:
       [&]()
       {
-        mac_t mac;
-        memcpy(&mac, radio.peer_info.peer_addr, ESP_NOW_ETH_ALEN);
-        if (handshake(&mac) == ESP_OK)
+        switch (handshake())
+        {
+        case ESP_OK:
           radio.status = RADIO_BEFORE_CONNECTED;
+          break;
+        case ESP_ERR_INVALID_MAC:
+          ESP_LOGE("RADIO_DISCONNECT", "ESP_ERR_INVALID_MAC");
+
+        case ESP_ERR_TIMEOUT:
+          ESP_LOGE("RADIO_DISCONNECT", "ESP_ERR_TIMEOUT");
+        }
       }();
       break;
 
@@ -365,8 +376,7 @@ void Radio::begin(const char *ssid, uint8_t channel)
            });
   ESP_LOGI(TAG, "Targe host mac " MACSTR "", MAC2STR(HOST_MAC));
 
-  // 开启AP
-  if (!WiFi.softAP(radio.SSID, "", 1, 0, 1, true))
+  if (!WiFi.softAP(radio.SSID, "", 1, 0, 4, true))
     ESP_LOGE(TAG, "AP Config failed.");
 
   ESP_LOGI(TAG, "AP Config Success.SSID: %s , MAC : %s, CHANNEL : %d", radio.SSID, WiFi.softAPmacAddress().c_str(), WiFi.channel());
