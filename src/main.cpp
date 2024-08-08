@@ -4,7 +4,7 @@
 #include <Radio.h>
 
 #define TAG "Main RC Vehicle"
-#define SSID "Slave_2"
+#define SSID "Slave"
 #define CHANNEL 1
 
 Vehicle vehicle;

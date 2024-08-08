@@ -28,6 +28,14 @@ QueueHandle_t Q_DATA_SEND = xQueueCreate(2, sizeof(radio_data_t));
 
 QueueHandle_t Q_ACK = xQueueCreate(2, sizeof(mac_t));
 
+// 检查mac是否有效
+bool macOK(const mac_t &arr)
+{
+  return std::any_of(arr.begin(), arr.end(),
+                     [](uint8_t byte)
+                     { return byte != 0x00 && byte != 0xFF; });
+}
+
 /**
  * @brief 等待主机握手
  * @param waitTick 超时等待
@@ -191,19 +199,19 @@ void onSend(const uint8_t *mac_addr, esp_now_send_status_t status)
   //   ESP_LOGI(TAG, "Send to " MACSTR " SUCCESS", MAC2STR(mac_addr));
 }
 
-// 初始化 espNow
+// 初始化AP和espNOW
 void Radio::initRadio()
 {
   // wifi set
-  WiFi.mode(WIFI_STA);
   WiFi.enableLongRange(true);
+  WiFi.mode(WIFI_AP);
   // esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_LR);
   // esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_LR);
 
-  // 设置模式 STA
-  if (WiFi.mode(WIFI_STA))
-    ESP_LOGI(TAG, "WIFI Start in STA,MAC: %s, CHANNEL: %u",
-             WiFi.macAddress().c_str(), WiFi.channel());
+  // 启动AP
+  if (!WiFi.softAP(radio.SSID, "", 1, 0, 4, true))
+    ESP_LOGE(TAG, "AP Config failed.");
+  ESP_LOGI(TAG, "AP Config Success.SSID: %s , MAC : %s, CHANNEL : %d", radio.SSID, WiFi.softAPmacAddress().c_str(), WiFi.channel());
 
   // 设置 ESPNOW 通讯速率
   esp_wifi_config_espnow_rate(WIFI_IF_STA, WIFI_PHY_RATE_LORA_500K) == ESP_OK
@@ -294,13 +302,6 @@ void TaskRadioMainLoop(void *pt)
     switch (radio.status)
     {
     case RADIO_BEFORE_WAIT_CONNECTION:
-      if (!WiFi.softAP(radio.SSID, "", 1, 0, 1, true))
-      {
-        ESP_LOGE(TAG, "AP Config failed.");
-        break;
-      }
-
-      ESP_LOGI(TAG, "AP Config Success.SSID: %s , MAC : %s, CHANNEL : %d", radio.SSID, WiFi.softAPmacAddress().c_str(), WiFi.channel());
       radio.status = RADIO_WAIT_CONNECTION; // AP 开启成功则进入等待连接状态
       break;
 
@@ -361,14 +362,25 @@ void TaskRadioMainLoop(void *pt)
   }
 }
 
+#include "sstream"
+#include "numeric"
+
 // 启动 esp_now 通讯
 void Radio::begin(const char *ssid, uint8_t channel)
 {
-  channel = channel;
-  SSID = ssid;
-  radio.status = RADIO_DISCONNECT;
+  std::ostringstream oss;
 
+  auto sta_mac = WiFi.macAddress().c_str();
+  oss << ssid << "-" << std::accumulate(sta_mac, sta_mac + 6, 0);
+  std::string temp_SSID = oss.str();
+
+  SSID = temp_SSID.c_str();
+  channel = channel;
+
+  radio.status = RADIO_DISCONNECT;
   this->initRadio();
+
+  // 读取配置
   nvs_call(STORGE_NAME_SPACE,
            [&](Preferences &prefs)
            {
@@ -376,10 +388,9 @@ void Radio::begin(const char *ssid, uint8_t channel)
            });
   ESP_LOGI(TAG, "Targe host mac " MACSTR "", MAC2STR(HOST_MAC));
 
-  if (!WiFi.softAP(radio.SSID, "", 1, 0, 4, true))
-    ESP_LOGE(TAG, "AP Config failed.");
-
-  ESP_LOGI(TAG, "AP Config Success.SSID: %s , MAC : %s, CHANNEL : %d", radio.SSID, WiFi.softAPmacAddress().c_str(), WiFi.channel());
+  // 之前有记忆的主机将会被添加到对等列表
+  if (macOK(HOST_MAC))
+    add_peer(HOST_MAC, 1, WIFI_IF_AP);
 
   xTaskCreate(TaskRadioMainLoop, "TaskRadioMainLoop", 4096, NULL, 24, NULL);
 }

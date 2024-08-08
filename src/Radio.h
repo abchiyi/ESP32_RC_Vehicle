@@ -56,7 +56,7 @@ public:
    * 以下定义的超时值单位为 1ms
    */
   uint8_t resend_count = 5;    // 超时重发次数
-  uint8_t timeout_resend = 50; // 超时重发
+  uint8_t timeout_resend = 70; // 超时重发
 };
 
 typedef struct channel_data

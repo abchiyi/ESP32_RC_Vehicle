@@ -1,9 +1,9 @@
 // H 桥驱动芯片输入引脚
-#define PIN_MOTOR_F 0
-#define PIN_MOTOR_R 1
+#define PIN_MOTOR_F 4
+#define PIN_MOTOR_R 5
 
 // 舵机引脚
-#define PIN_SERVO 10
+#define PIN_SERVO 1
 
 // 灯光引脚
 #define PIN_LIGHT_TR 4  // 右转向灯
