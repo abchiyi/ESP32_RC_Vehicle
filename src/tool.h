@@ -15,3 +15,5 @@ bool areArraysEqual(const T (&a)[N], const T (&b)[N])
  * @param cb_fn 执行回调
  */
 void nvs_call(const char *name_space, std::function<void(Preferences &)> cb_fn);
+
+void setPowerCheck();

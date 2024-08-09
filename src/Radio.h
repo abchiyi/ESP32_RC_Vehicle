@@ -3,9 +3,8 @@
 
 #define RADIO_CHANNEL_MAX 8 // 最大控制通道数量
 
-typedef esp_err_t (*send_cb_t)(uint8_t *);
-
 typedef std::array<unsigned char, ESP_NOW_ETH_ALEN> mac_t; // MAC 地址
+typedef std::function<void()> radio_cb_fn_t;               // 回调函数类型
 
 // 通讯结构体
 typedef struct
@@ -48,8 +47,9 @@ public:
   mac_t HOST_MAC;                                // 主机地址
 
   /** 回调函数 */
-  std::function<void()> onDisconnect = NULL;
-  std::function<void(radio_data_t)> __onRecv = NULL;
+  radio_cb_fn_t cb_fn_on_disconnect = NULL;                    // 断开连接时
+  std::function<void(radio_data_t)> cb_fn_arfter_recve = NULL; // 收到数据后
+  radio_cb_fn_t cb_fn_before_send = NULL;                      // 发送数据前
 
   /**
    * freeRTOS 在esp32 一个 tick 为 1ms

@@ -96,7 +96,7 @@ bool add_peer(
     return true;
 
   case ESP_ERR_ESPNOW_EXIST:
-    ESP_LOGE(TAG, "Peer Exists");
+    ESP_LOGW(TAG, "Peer Exists");
     return true;
 
   case ESP_ERR_ESPNOW_NOT_INIT:
@@ -326,15 +326,15 @@ void TaskRadioMainLoop(void *pt)
           break;
 
       xQueueReceive(Q_DATA_SEND, &radio_data_send, 1);
-      if (radio.__onRecv)
-        radio.__onRecv(radio_data_recv);
+      if (radio.cb_fn_arfter_recve)
+        radio.cb_fn_arfter_recve(radio_data_recv);
       radio.send(radio_data_send);
 
       break;
 
     case RADIO_BEFORE_DISCONNECT:
-      if (radio.onDisconnect) // 执行断联回调
-        radio.onDisconnect();
+      if (radio.cb_fn_on_disconnect) // 执行断联回调
+        radio.cb_fn_on_disconnect();
       ESP_LOGI(TAG, "RADIO_DISCONNECT");
       radio.status = RADIO_DISCONNECT;
       break;

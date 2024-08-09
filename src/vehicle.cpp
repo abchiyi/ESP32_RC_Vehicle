@@ -197,7 +197,7 @@ void LightSetup()
 void Vehicle::begin()
 {
 
-  radio.onDisconnect = [&]()
+  radio.cb_fn_on_disconnect = [&]()
   {
     ESP_LOGI(TAG, "RADIO_DISCONNECT STOP !!!!!");
     TurnServo.write(90);
@@ -205,7 +205,7 @@ void Vehicle::begin()
     ledcWrite(CHANNEL_MOVE_R, 0);
   };
 
-  radio.__onRecv = task_vehicle_main;
+  radio.cb_fn_arfter_recve = task_vehicle_main;
 
   LightSetup();
 
