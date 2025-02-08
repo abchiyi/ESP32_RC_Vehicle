@@ -1,0 +1,5 @@
+{
+  "name": "wifi&esp_now",
+  "expo": ["include/*"],
+  "headers": ["wifiLink.h"]
+}

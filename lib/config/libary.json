@@ -1,0 +1,5 @@
+{
+  "name": "Config",
+  "expo": ["include/*"],
+  "headers": ["config.h"]
+}

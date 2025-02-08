@@ -1,0 +1,5 @@
+{
+    "name":"common",
+    "expo":["include/*"],
+    "headers":["common.h"]
+}

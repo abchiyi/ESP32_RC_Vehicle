@@ -1,3 +1,3 @@
-[submodule "lib/EspNowAdvanced"]
-	path = lib/EspNowAdvanced
-	url = https://github.com/abchiyi/EspNowAdvanced.git
+[submodule "lib/esp_crtp"]
+	path = lib/esp_crtp
+	url = https://github.com/abchiyi/ESP_CRTP.git
