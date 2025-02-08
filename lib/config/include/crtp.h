@@ -79,8 +79,6 @@ typedef struct _CRTPPacket
   };
 } __attribute__((packed)) CRTPPacket;
 
-auto a = sizeof(CRTPPacket);
-
 typedef void (*CrtpCallback)(CRTPPacket *);
 
 /**

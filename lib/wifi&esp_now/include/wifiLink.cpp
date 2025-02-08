@@ -1,32 +1,44 @@
+/**
+ * 使用WiFi&ESP-NOW实现无线通讯,通讯协议使用 CRTP 协议。WiFi 允许3个设备连接，
+ * ESP-NOW 只允许一个主机进行通讯。peer_info 会记录第一个连接的主机，此后只要该
+ * 变量不为 nullptr，ESP_NOW 端口则不会接收来自其他主机的数据。
+ * Copyright (c) <abchiyi>
+ */
+
+#include "wifiLink.h"
+#include <crtp.h>
+
 #include <esp_log.h>
 #include <esp_err.h>
 #include <esp_mac.h>
-#include "wifiLink.h"
+#include <vector>
 
 // WiFi & esp_now
 #include <WiFi.h>
 #include "esp_wifi.h"
 #include "esp_now.h"
+#include "esp_mac.h"
 
+// rtos
 #include "freertos/queue.h"
-
-#include <crtp.h>
-
-#include <vector>
 
 #define TAG "Radio"
 
-uint8_t CHANNEL = 1;     // 通讯频道
+// #define LORA_MODE // 启用以开启 LoRa 模式，默认关闭。启用后使用乐鑫专有协议
+
 uint8_t STATUS_LINK = 0; // 链接状态
+
+esp_now_peer_info_t *peer_info = nullptr; // ESP_NOW通讯设备信息
 
 /******** 储存配置命名 ********/
 #define STOREG_NAME_SPACE "RADIO_CONFIG" // 储存命名空间
 #define STOREG_LAST_DEVICE "HOST_ADDR"   // 最后连接的设备
 
-#define WIFI_MODE WIFI_STA
+// #define WIFI_MODE WIFI_STA
+#define WIFI_MODE WIFI_AP_STA
 
-static xQueueHandle crtpPacketDelivery;
-static xQueueHandle crtpPacketReceive;
+static xQueueHandle crtpPacketDelivery = nullptr; // crtp 发送队列
+static xQueueHandle wifiPacketReceive = nullptr;  // wifi 接收队列
 
 int setWiFiLinkEnable(bool enable);
 int sendWifiLinkPacket(CRTPPacket *pk);
@@ -65,84 +77,77 @@ bool macOK(const mac_t &arr)
 }
 
 /**
+ * @brief 查找最清晰的WiFi信道
+ *
+ * 该函数扫描1到14信道，统计每个信道上发现的AP数量，并返回AP数量最少的信道编号。
+ * 信道编号从1开始。
+ *
+ * @return uint8_t 最清晰的信道编号
+ */
+uint8_t find_clear_channel()
+{
+  uint8_t ap_count[14] = {}; // 保存扫描到的AP数量,信道 1~14
+
+  // 扫描1~13信道，过滤并储存所有查找到的AP信息
+  for (size_t channel = 0; channel < sizeof(ap_count); channel++)
+  {
+    auto scanResults = WiFi.scanNetworks(0, 1, 0, 100, channel + 1);
+    ap_count[channel] = scanResults;
+    WiFi.scanDelete(); // 清除扫描信息
+  }
+  // 对 ap_count 进行排序，从小到大
+  std::sort(ap_count, ap_count + sizeof(ap_count) / sizeof(ap_count[0]));
+
+  // 找到最清晰的信道（AP数量最少的信道）
+  uint8_t clear_channel =
+      std::min_element(ap_count, ap_count + sizeof(ap_count) / sizeof(ap_count[0])) - ap_count;
+  return clear_channel + 1; // 信道编号从1开始
+};
+
+/**
  * @brief 根据 mac 地址配对到指定的设备
  * @param macaddr 数组 mac地址
  * @param channel wifi 频道
  * @param ifidx 要使用的wifi接口用于收发数据
  */
-bool add_peer(mac_t macaddr, uint8_t channel, wifi_interface_t ifidx = WIFI_IF_STA)
+bool add_peer(mac_t macaddr)
 {
-  // ESP_LOGI(TAG, "Pair to " MACSTR "", MAC2STR(macaddr));
-  esp_now_peer_info_t p;
-  auto peer_info = &p;
-  memset(peer_info, 0, sizeof(esp_now_peer_info_t)); // 清空对象
-  memcpy(peer_info->peer_addr, macaddr.data(), ESP_NOW_ETH_ALEN);
-  peer_info->channel = channel;
-  peer_info->encrypt = false;
-  peer_info->ifidx = ifidx;
+  auto ifidx = (WIFI_MODE == WIFI_AP_STA)
+                   ? WIFI_IF_AP
+                   : WIFI_IF_STA;
 
-  esp_err_t ret = esp_now_add_peer(peer_info);
+  esp_now_peer_info_t peer_info = {
+      .channel = 0,     // 0 = 当前WiFi所在频道
+      .ifidx = ifidx,   // 要使用的接口
+      .encrypt = false, // 不加密
+  };
+  memcpy(peer_info.peer_addr, macaddr.data(), ESP_NOW_ETH_ALEN);
+
+  esp_err_t ret = esp_now_add_peer(&peer_info);
 
   if (ret != ESP_OK)
   {
     ESP_LOGE(TAG, "Pair fail, error code: %s", esp_err_to_name(ret));
     return false;
   }
-  ESP_LOGD(TAG, "Pair success, channel: %d", channel);
+  ESP_LOGI(TAG, "Pair success,mac :" MACSTR "", MAC2STR(macaddr));
   return true;
 }
 
-template <typename T>
-bool send(const T &data)
+// ESP-NOW 接收回调
+IRAM_ATTR inline void onRecv(const uint8_t *mac, const uint8_t *incomingData, int len)
 {
-  // ESP_LOGI(TAG, "Send to " MACSTR " - pd of : %d", MAC2STR(this->peer_info.peer_addr), &data);
+  static radio_packet_t radio_data_recv; // 接收数据缓存
+  if (len > sizeof(radio_packet_t))      // 避免缓冲区溢出
+    return;
+  memcpy(&radio_data_recv, incomingData, len);
 
-  // String error_message;
-  // switch (esp_now_send(
-  //     this->peer_info.peer_addr,
-  //     (uint8_t *)&data, sizeof(data)))
-  // {
-  // case ESP_OK:
-  //   return true;
-  // case ESP_ERR_ESPNOW_NO_MEM:
-  //   error_message = String("out of memory");
-  //   break;
-  // case ESP_ERR_ESPNOW_NOT_FOUND:
-  //   error_message = String("peer is not found");
-  //   break;
-  // case ESP_ERR_ESPNOW_IF:
-  //   error_message = String("current WiFi interface doesn't match that of peer");
-  //   break;
-  // case ESP_ERR_ESPNOW_NOT_INIT:
-  //   error_message = String("ESPNOW is not initialized");
-  //   break;
-  // case ESP_ERR_ESPNOW_ARG:
-  //   error_message = String("invalid argument");
-  //   break;
-  // case ESP_ERR_ESPNOW_INTERNAL:
-  //   error_message = String("internal error");
-  //   break;
-  // default:
-  //   error_message = String("Send fail");
-  //   break;
-  // }
-
-  // ESP_LOGI(TAG, "Send to " MACSTR " - %s",
-  //          MAC2STR(this->peer_info.peer_addr), error_message.c_str());
-  return false;
-}
-
-// 接收回调
-void onRecv(const uint8_t *mac, const uint8_t *incomingData, int len)
-{
-  // memcpy(&radio_data_recv, incomingData, sizeof(radio_data_recv));
-  // memcpy(&radio_data_recv.mac_addr, mac, sizeof(radio_data_recv.mac_addr));
-  // if (xQueueSend(Q_RECV_DATA, &radio_data_recv, 1) != pdPASS)
-  //   ;
+  // 避免阻塞WiFi任务，等待时间0
+  xQueueSend(wifiPacketReceive, &radio_data_recv, 0);
 }
 
 // 发送回调
-void onSend(const uint8_t *mac_addr, esp_now_send_status_t status)
+IRAM_ATTR inline void onSend(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
   static uint8_t counter_resend = 0;
 
@@ -170,60 +175,72 @@ void onSend(const uint8_t *mac_addr, esp_now_send_status_t status)
   //   ESP_LOGI(TAG, "Send to " MACSTR " SUCCESS", MAC2STR(mac_addr));
 }
 
-void wifiLinkTask(void *pvParameters)
+IRAM_ATTR void wifiLinkTask(void *pvParameters)
 {
-  CRTPPacket *p = nullptr;
+  static radio_packet_t rp = {};
+  static CRTPPacket crtp = {};
   while (true)
   {
-    if (xQueueReceive(crtpPacketDelivery, &p, portMAX_DELAY) == pdTRUE)
+    memset(&rp, 0, sizeof(radio_packet_t));
+
+    if (xQueueReceive(wifiPacketReceive, &rp, portMAX_DELAY) == pdTRUE)
     {
-      xQueueSend(crtpPacketDelivery, &p, pdMS_TO_TICKS(20));
+      // 验证数据是否有效
+      auto cksum = rp.data[sizeof(rp.data) - 1];
+      if (cksum != calculate_cksum(rp.data, sizeof(rp.data)))
+      {
+        ESP_LOGI(TAG, "CRC ERROR");
+        continue;
+      }
+      memcpy(&crtp, rp.data, sizeof(crtp.raw));
+      xQueueSend(crtpPacketDelivery, &rp, pdMS_TO_TICKS(5));
     }
   }
 }
 
-#include "sstream"
-#include "numeric"
-
 void wifi_init()
 {
-  std::ostringstream oss;
-  auto sta_mac = WiFi.macAddress().c_str();
-  oss << "ESP" << "-" << std::accumulate(sta_mac, sta_mac + 6, 0);
-  std::string temp_SSID = oss.str();
+
+  wifiPacketReceive = xQueueCreate(10, sizeof(radio_packet_t));
+  assert(wifiPacketReceive);
+
+  crtpPacketDelivery = xQueueCreate(10, sizeof(CRTPPacket));
+  assert(crtpPacketDelivery);
 
   auto wifi_mode = WIFI_MODE == WIFI_STA ? WIFI_IF_STA : WIFI_IF_AP;
 
   // Set wifi
-  ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(84)); // Set TxPower 20db
-  esp_wifi_set_storage(WIFI_STORAGE_RAM);         // WiFi 配置存储在 RAM 中
-  WiFi.enableLongRange(true);                     // 启用长距离模式
-  assert(WiFi.mode(WIFI_MODE));                   // 设置wifi模式为STA
+  esp_wifi_set_storage(WIFI_STORAGE_RAM); // WiFi 配置存储在 RAM 中
+#ifdef LORA_MODE
+  WiFi.enableLongRange(true); // 启用长距离通信模式
+#endif
+  assert(WiFi.mode(WIFI_MODE)); // 设置wifi模
+  assert(WiFi.setTxPower(WIFI_POWER_19_5dBm));
+
+  if (WIFI_MODE == WIFI_AP_STA)
+  {
+    mac_t mac;
+    WiFi.macAddress(mac.data());
+    mac[5]++; // mac末尾地址加一为 AP 的mac地址
+
+    char ssid[33];
+    sprintf(ssid, "ESP32-%02X%02X%02X", mac[3], mac[4], mac[5]);
+
+    // TODO 使用nvs储存另设密码
+    auto channel = find_clear_channel();             // 查找最清晰的信道
+    WiFi.softAP(ssid, "12345678", channel, 0, 3, 1); // 设置AP
+    ESP_LOGI(TAG, "AP Started, SSID: %s", ssid);
+  }
 
   // Set esp now
   ESP_ERROR_CHECK(esp_now_init());
-  ESP_ERROR_CHECK(esp_wifi_config_espnow_rate(
-      wifi_mode, WIFI_PHY_RATE_LORA_500K));          // 设置 ESPNOW 通讯速率
   ESP_ERROR_CHECK(esp_now_register_recv_cb(onRecv)); // 注册接收回调
   ESP_ERROR_CHECK(esp_now_register_send_cb(onSend)); // 注册发送回调
+#ifdef LORA_MODE
+  ESP_ERROR_CHECK(esp_wifi_config_espnow_rate(
+      wifi_mode, WIFI_PHY_RATE_LORA_500K)); // 设置 ESPNOW 通讯速率
+#endif
 
   auto ret = xTaskCreate(wifiLinkTask, "wifiLinkTask", 4096, NULL, 10, NULL);
-  ESP_ERROR_CHECK(ret);
+  assert(ret == pdPASS);
 }
-
-// void confgi_save()
-// {
-//   ESP_LOGI(TAG, "Save confgi");
-//   nvs_call(STORGE_NAME_SPACE, [&](Preferences &prefs)
-//            { prefs.putBytes(
-//                  STORGE_LAST_DEVICE,
-//                  &HOST_MAC,
-//                  sizeof(mac_t)); });
-// };
-
-// void config_clear()
-// {
-//   ESP_LOGI(TAG, "Clear confgi");
-//   nvs_call(STORGE_NAME_SPACE, [](Preferences &prefs)
-//            { prefs.clear(); });
-// }
