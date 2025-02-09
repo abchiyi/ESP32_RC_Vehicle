@@ -5,6 +5,8 @@
  * Copyright (c) <abchiyi>
  */
 
+#include "common.h"
+
 #include "wifiLink.h"
 #include <crtp.h>
 
@@ -18,43 +20,59 @@
 #include "esp_wifi.h"
 #include "esp_now.h"
 #include "esp_mac.h"
+#include "WiFiUdp.h"
 
 // rtos
 #include "freertos/queue.h"
 
 #define TAG "Radio"
 
-// #define LORA_MODE // 启用以开启 LoRa 模式，默认关闭。启用后使用乐鑫专有协议
-
-uint8_t STATUS_LINK = 0; // 链接状态
-
-esp_now_peer_info_t *peer_info = nullptr; // ESP_NOW通讯设备信息
-
-/******** 储存配置命名 ********/
+#define PORT 8080                        // UDP 监听端口
 #define STOREG_NAME_SPACE "RADIO_CONFIG" // 储存命名空间
 #define STOREG_LAST_DEVICE "HOST_ADDR"   // 最后连接的设备
+#define WIFI_MODE WIFI_AP_STA            // WIFI AP&STA 模式
+// #define LORA_MODE // 启用以开启 LoRa 模式，默认关闭。启用后使用乐鑫专有协议
 
-// #define WIFI_MODE WIFI_STA
-#define WIFI_MODE WIFI_AP_STA
-
+static esp_now_peer_info_t *peer_info = nullptr;  // ESP_NOW通讯设备信息
 static xQueueHandle crtpPacketDelivery = nullptr; // crtp 发送队列
 static xQueueHandle wifiPacketReceive = nullptr;  // wifi 接收队列
 
 int setWiFiLinkEnable(bool enable);
-int sendWifiLinkPacket(CRTPPacket *pk);
-int receiveWifiLinkPacket(CRTPPacket *pk);
+int wifiLinkPacketSend(CRTPPacket *pk);
+int wifiLinkPacketRecv(CRTPPacket *pk);
 bool isWiFiLinkConnected(void);
 int resetWiFiLink(void);
 
+WiFiUDP udp;
+
 static struct crtpLinkOperations wifiLinkInstance = {
     .setEnable = setWiFiLinkEnable,
-    .sendPacket = sendWifiLinkPacket,
-    .receivePacket = receiveWifiLinkPacket,
+    .sendPacket = wifiLinkPacketSend,
+    .receivePacket = wifiLinkPacketRecv,
     .isConnected = isWiFiLinkConnected,
     // .reset = resetWiFiLink,
 };
 
-static uint8_t calculate_cksum(void *data, size_t len)
+IRAM_ATTR inline int wifiLinkPacketRecv(CRTPPacket *pk)
+{
+  if (wifiPacketReceive == nullptr)
+    return -1;
+
+  if (xQueueReceive(wifiPacketReceive, pk, 0) == pdTRUE)
+    return 0;
+  else
+    return -1;
+}
+
+// TODO 未完成的函数
+IRAM_ATTR inline int wifiLinkPacketSend(CRTPPacket *pk)
+{
+  ESP_LOGE(TAG, "UN SET SEND");
+  assert(false);
+}
+
+static uint8_t
+calculate_cksum(void *data, size_t len)
 {
   auto c = (unsigned char *)data;
   unsigned char cksum = 0;
@@ -175,6 +193,37 @@ IRAM_ATTR inline void onSend(const uint8_t *mac_addr, esp_now_send_status_t stat
   //   ESP_LOGI(TAG, "Send to " MACSTR " SUCCESS", MAC2STR(mac_addr));
 }
 
+IRAM_ATTR void wifiUdpTask(void *pvParameters)
+{
+  // 此任务以200hz的频率运行
+  TickType_t xFrequency = HZ2TICKS(200);
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+
+  while (true)
+  {
+    static radio_packet_t rp = {};
+    auto packetSize = udp.parsePacket();
+    if (packetSize && packetSize < sizeof(rp)) // 包长度有效&避免缓冲区溢出
+    {
+      udp.read(rp.data, packetSize);
+      xQueueSend(wifiPacketReceive, &rp, 0);
+    }
+
+    vTaskDelayUntil(&xLastWakeTime, xFrequency);
+  }
+}
+
+/**
+ * @brief 接收校验数据是否有效，有效则发布到队列
+ *
+ * 该任务持续监听 wifiPacketReceive 队列，接收来自无线模块的数据包。
+ * 接收到数据包后，它会验证数据的校验和以确保数据的完整性。
+ * 如果数据有效，它会将数据复制到 CRTPPacket 结构体，并将原始数据包发送到 crtpPacketDelivery 队列以供进一步处理。
+ *
+ * @param pvParameters 任务参数，未在此函数中使用。
+ *
+ * @note 该函数使用 IRAM_ATTR 属性，表明它应该存储在 IRAM 中，以便在中断上下文中快速访问。
+ */
 IRAM_ATTR void wifiLinkTask(void *pvParameters)
 {
   static radio_packet_t rp = {};
@@ -189,7 +238,7 @@ IRAM_ATTR void wifiLinkTask(void *pvParameters)
       auto cksum = rp.data[sizeof(rp.data) - 1];
       if (cksum != calculate_cksum(rp.data, sizeof(rp.data)))
       {
-        ESP_LOGI(TAG, "CRC ERROR");
+        ESP_LOGE(TAG, "CRC ERROR");
         continue;
       }
       memcpy(&crtp, rp.data, sizeof(crtp.raw));
@@ -201,6 +250,7 @@ IRAM_ATTR void wifiLinkTask(void *pvParameters)
 void wifi_init()
 {
 
+  // queue setup
   wifiPacketReceive = xQueueCreate(10, sizeof(radio_packet_t));
   assert(wifiPacketReceive);
 
@@ -213,6 +263,8 @@ void wifi_init()
   esp_wifi_set_storage(WIFI_STORAGE_RAM); // WiFi 配置存储在 RAM 中
 #ifdef LORA_MODE
   WiFi.enableLongRange(true); // 启用长距离通信模式
+#else
+  WiFi.enableLongRange(false); // 启用长距离通信模式
 #endif
   assert(WiFi.mode(WIFI_MODE)); // 设置wifi模
   assert(WiFi.setTxPower(WIFI_POWER_19_5dBm));
@@ -232,6 +284,10 @@ void wifi_init()
     ESP_LOGI(TAG, "AP Started, SSID: %s", ssid);
   }
 
+  // Set UDP
+  udp.begin(7890);
+  auto ret = xTaskCreate(wifiUdpTask, "wifiUdpTask", 4096, NULL, 10, NULL);
+
   // Set esp now
   ESP_ERROR_CHECK(esp_now_init());
   ESP_ERROR_CHECK(esp_now_register_recv_cb(onRecv)); // 注册接收回调
@@ -239,6 +295,9 @@ void wifi_init()
 #ifdef LORA_MODE
   ESP_ERROR_CHECK(esp_wifi_config_espnow_rate(
       wifi_mode, WIFI_PHY_RATE_LORA_500K)); // 设置 ESPNOW 通讯速率
+#else
+  ESP_ERROR_CHECK(esp_wifi_config_espnow_rate(
+      wifi_mode, WIFI_PHY_RATE_MCS1_LGI)); // 设置 ESPNOW 通讯速率
 #endif
 
   auto ret = xTaskCreate(wifiLinkTask, "wifiLinkTask", 4096, NULL, 10, NULL);
