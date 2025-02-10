@@ -31,17 +31,20 @@
 #define STOREG_NAME_SPACE "RADIO_CONFIG" // 储存命名空间
 #define STOREG_LAST_DEVICE "HOST_ADDR"   // 最后连接的设备
 #define WIFI_MODE WIFI_AP_STA            // WIFI AP&STA 模式
+#define TIME_OUT_WiFi_RX_PACKET 100      // WiFi 接收超时时间(ms)
 
 // #define LORA_MODE                        // 启用以开启 LoRa 模式，默认关闭
 
 static esp_now_peer_info_t *peer_info = nullptr;  // ESP_NOW通讯设备信息
 static xQueueHandle crtpPacketDelivery = nullptr; // crtp 发送队列
 static xQueueHandle wifiPacketReceive = nullptr;  // wifi 接收队列
+static volatile TickType_t wifiReceiveInterval;   // WiFi 接收间隔
 
 int setWiFiLinkEnable(bool enable);
 int wifiLinkPacketSend(CRTPPacket *pk);
 int wifiLinkPacketRecv(CRTPPacket *pk);
 bool isWiFiLinkConnected(void);
+static uint8_t calculate_cksum(void *data, size_t len);
 int resetWiFiLink(void);
 
 WiFiUDP udp;
@@ -72,7 +75,7 @@ IRAM_ATTR inline int wifiLinkPacketSend(CRTPPacket *pk)
   static radio_packet_t rp = {};
   memset(&rp, 0, sizeof(rp));
   memcpy(rp.data, pk->raw, sizeof(pk->raw));
-  rp.data[sizeof(rp.data) - 1] = calculate_cksum(&rp, sizeof(rp.data) - 1);
+  rp.data[sizeof(rp.data) - 1] = calculate_cksum(rp.data, sizeof(rp.data) - 1);
 
   // ESP_NOW
   if (peer_info != nullptr)
@@ -86,10 +89,18 @@ IRAM_ATTR inline int wifiLinkPacketSend(CRTPPacket *pk)
   return 0;
 }
 
+/**
+ * @brief 判断 WiFi 链路是否已连接
+ * 该函数用于检查 WiFi 链路的连接状态。
+ * @return 如果 WiFi 链路已连接，则返回 true；否则返回 false。
+ */
+bool isWiFiLinkConnected(void)
+{
+  return wifiReceiveInterval <= TIME_OUT_WiFi_RX_PACKET;
+}
 /*-----------------------------------------------------------------*/
 
-static uint8_t
-calculate_cksum(void *data, size_t len)
+static uint8_t calculate_cksum(void *data, size_t len)
 {
   auto c = (unsigned char *)data;
   unsigned char cksum = 0;
@@ -247,12 +258,25 @@ IRAM_ATTR void wifiLinkTask(void *pvParameters)
 {
   static radio_packet_t rp = {};
   static CRTPPacket crtp = {};
+  auto xMutex = xSemaphoreCreateMutex();
   while (true)
   {
     memset(&rp, 0, sizeof(radio_packet_t));
 
     if (xQueueReceive(wifiPacketReceive, &rp, portMAX_DELAY) == pdTRUE)
     {
+      // 记录接收时间
+      static TickType_t lastRecvTime = 0;
+      TickType_t currentTime = xTaskGetTickCount();
+
+      taskENTER_CRITICAL(xMutex);
+      if (lastRecvTime != 0)
+        wifiReceiveInterval = currentTime - lastRecvTime;
+      taskEXIT_CRITICAL(xMutex);
+
+      lastRecvTime = currentTime;
+
+      // TODO 如果数据来自 esp-now 则不校验
       // 验证数据是否有效
       auto cksum = rp.data[sizeof(rp.data) - 1];
       if (cksum != calculate_cksum(rp.data, sizeof(rp.data) - 1))
