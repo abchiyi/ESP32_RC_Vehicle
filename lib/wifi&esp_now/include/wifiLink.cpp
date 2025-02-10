@@ -31,7 +31,8 @@
 #define STOREG_NAME_SPACE "RADIO_CONFIG" // 储存命名空间
 #define STOREG_LAST_DEVICE "HOST_ADDR"   // 最后连接的设备
 #define WIFI_MODE WIFI_AP_STA            // WIFI AP&STA 模式
-// #define LORA_MODE // 启用以开启 LoRa 模式，默认关闭。启用后使用乐鑫专有协议
+
+// #define LORA_MODE                        // 启用以开启 LoRa 模式，默认关闭
 
 static esp_now_peer_info_t *peer_info = nullptr;  // ESP_NOW通讯设备信息
 static xQueueHandle crtpPacketDelivery = nullptr; // crtp 发送队列
@@ -67,9 +68,24 @@ IRAM_ATTR inline int wifiLinkPacketRecv(CRTPPacket *pk)
 // TODO 未完成的函数
 IRAM_ATTR inline int wifiLinkPacketSend(CRTPPacket *pk)
 {
-  ESP_LOGE(TAG, "UN SET SEND");
-  assert(false);
+  // 组包
+  static radio_packet_t rp = {};
+  memset(&rp, 0, sizeof(rp));
+  memcpy(rp.data, pk->data, sizeof(*pk));
+
+  // ESP_NOW
+  if (peer_info != nullptr)
+  {
+    auto ret = esp_now_send(peer_info->peer_addr, (uint8_t *)&rp, sizeof(rp));
+    if (ret != ESP_OK)
+      ESP_LOGE(TAG, "esp_now_send failed: %s", esp_err_to_name(ret));
+  }
+  // TODO WIFI_UDP
+
+  return 0;
 }
+
+/*-----------------------------------------------------------------*/
 
 static uint8_t
 calculate_cksum(void *data, size_t len)
@@ -109,7 +125,7 @@ uint8_t find_clear_channel()
   // 扫描1~13信道，过滤并储存所有查找到的AP信息
   for (size_t channel = 0; channel < sizeof(ap_count); channel++)
   {
-    auto scanResults = WiFi.scanNetworks(0, 1, 0, 100, channel + 1);
+    auto scanResults = WiFi.scanNetworks(0, 1, 0, 50, channel + 1);
     ap_count[channel] = scanResults;
     WiFi.scanDelete(); // 清除扫描信息
   }
@@ -125,8 +141,6 @@ uint8_t find_clear_channel()
 /**
  * @brief 根据 mac 地址配对到指定的设备
  * @param macaddr 数组 mac地址
- * @param channel wifi 频道
- * @param ifidx 要使用的wifi接口用于收发数据
  */
 bool add_peer(mac_t macaddr)
 {
@@ -150,18 +164,6 @@ bool add_peer(mac_t macaddr)
   }
   ESP_LOGI(TAG, "Pair success,mac :" MACSTR "", MAC2STR(macaddr));
   return true;
-}
-
-// ESP-NOW 接收回调
-IRAM_ATTR inline void onRecv(const uint8_t *mac, const uint8_t *incomingData, int len)
-{
-  static radio_packet_t radio_data_recv; // 接收数据缓存
-  if (len > sizeof(radio_packet_t))      // 避免缓冲区溢出
-    return;
-  memcpy(&radio_data_recv, incomingData, len);
-
-  // 避免阻塞WiFi任务，等待时间0
-  xQueueSend(wifiPacketReceive, &radio_data_recv, 0);
 }
 
 // 发送回调
@@ -193,7 +195,20 @@ IRAM_ATTR inline void onSend(const uint8_t *mac_addr, esp_now_send_status_t stat
   //   ESP_LOGI(TAG, "Send to " MACSTR " SUCCESS", MAC2STR(mac_addr));
 }
 
-IRAM_ATTR void wifiUdpTask(void *pvParameters)
+// ESP-NOW 接收回调
+IRAM_ATTR inline void onRecv(const uint8_t *mac, const uint8_t *incomingData, int len)
+{
+  static radio_packet_t radio_data_recv; // 接收数据缓存
+  if (len > sizeof(radio_packet_t))      // 避免缓冲区溢出
+    return;
+  memcpy(&radio_data_recv, incomingData, len);
+
+  // 避免阻塞WiFi任务，等待时间0
+  xQueueSend(wifiPacketReceive, &radio_data_recv, 0);
+}
+
+// WiFi UDP 接收任务
+IRAM_ATTR void wifiUdpTaskRecv(void *pvParameters)
 {
   // 此任务以200hz的频率运行
   TickType_t xFrequency = HZ2TICKS(200);
@@ -201,15 +216,22 @@ IRAM_ATTR void wifiUdpTask(void *pvParameters)
 
   while (true)
   {
+    vTaskDelayUntil(&xLastWakeTime, xFrequency);
+
     static radio_packet_t rp = {};
-    auto packetSize = udp.parsePacket();
+    static auto packetSize = udp.parsePacket();
+
+    if (peer_info != nullptr) // esp-now 的数据优先
+      continue;
+
     if (packetSize && packetSize < sizeof(rp)) // 包长度有效&避免缓冲区溢出
     {
+      IPAddress remoteIP = udp.remoteIP();
+      uint16_t remotePort = udp.remotePort();
+
       udp.read(rp.data, packetSize);
       xQueueSend(wifiPacketReceive, &rp, 0);
     }
-
-    vTaskDelayUntil(&xLastWakeTime, xFrequency);
   }
 }
 
@@ -257,16 +279,17 @@ void wifi_init()
   crtpPacketDelivery = xQueueCreate(10, sizeof(CRTPPacket));
   assert(crtpPacketDelivery);
 
-  auto wifi_mode = WIFI_MODE == WIFI_STA ? WIFI_IF_STA : WIFI_IF_AP;
-
   // Set wifi
+  auto wifi_mode = (WIFI_MODE == WIFI_STA) ? WIFI_IF_STA : WIFI_IF_AP;
   esp_wifi_set_storage(WIFI_STORAGE_RAM); // WiFi 配置存储在 RAM 中
 #ifdef LORA_MODE
-  WiFi.enableLongRange(true); // 启用长距离通信模式
-#else
-  WiFi.enableLongRange(false); // 启用长距离通信模式
-#endif
+  WiFi.enableLongRange(true);   // 启用长距离通信模式
   assert(WiFi.mode(WIFI_MODE)); // 设置wifi模
+#else
+  assert(WiFi.mode(WIFI_MODE)); // 设置wifi模
+  auto ret = esp_wifi_set_protocol(wifi_mode, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+  ESP_ERROR_CHECK(ret);
+#endif
   assert(WiFi.setTxPower(WIFI_POWER_19_5dBm));
 
   if (WIFI_MODE == WIFI_AP_STA)
@@ -276,17 +299,17 @@ void wifi_init()
     mac[5]++; // mac末尾地址加一为 AP 的mac地址
 
     char ssid[33];
-    sprintf(ssid, "ESP32-%02X%02X%02X", mac[3], mac[4], mac[5]);
+    sprintf(ssid, "ESP32-%02X:%02X:%02X", mac[3], mac[4], mac[5]);
 
     // TODO 使用nvs储存另设密码
     auto channel = find_clear_channel();             // 查找最清晰的信道
-    WiFi.softAP(ssid, "12345678", channel, 0, 3, 1); // 设置AP
+    WiFi.softAP(ssid, "12345678", channel, 0, 1, 1); // 设置AP
     ESP_LOGI(TAG, "AP Started, SSID: %s", ssid);
   }
 
   // Set UDP
   udp.begin(7890);
-  auto ret = xTaskCreate(wifiUdpTask, "wifiUdpTask", 4096, NULL, 10, NULL);
+  ret = xTaskCreate(wifiUdpTaskRecv, "wifiUdpTask", 4096, NULL, 10, NULL);
 
   // Set esp now
   ESP_ERROR_CHECK(esp_now_init());
@@ -300,6 +323,6 @@ void wifi_init()
       wifi_mode, WIFI_PHY_RATE_MCS1_LGI)); // 设置 ESPNOW 通讯速率
 #endif
 
-  auto ret = xTaskCreate(wifiLinkTask, "wifiLinkTask", 4096, NULL, 10, NULL);
+  ret = xTaskCreate(wifiLinkTask, "wifiLinkTask", 4096, NULL, 10, NULL);
   assert(ret == pdPASS);
 }

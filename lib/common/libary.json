@@ -1,5 +1,5 @@
 {
-    "name":"common",
-    "expo":["include/*"],
-    "headers":["common.h"]
+  "name": "common",
+  "expo": ["include/*"],
+  "headers": ["common.h"]
 }
