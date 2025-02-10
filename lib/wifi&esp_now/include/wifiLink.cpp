@@ -68,10 +68,11 @@ IRAM_ATTR inline int wifiLinkPacketRecv(CRTPPacket *pk)
 // TODO 未完成的函数
 IRAM_ATTR inline int wifiLinkPacketSend(CRTPPacket *pk)
 {
-  // 组包
+  // 设置待发送数据
   static radio_packet_t rp = {};
   memset(&rp, 0, sizeof(rp));
-  memcpy(rp.data, pk->data, sizeof(*pk));
+  memcpy(rp.data, pk->raw, sizeof(pk->raw));
+  rp.data[sizeof(rp.data) - 1] = calculate_cksum(&rp, sizeof(rp.data) - 1);
 
   // ESP_NOW
   if (peer_info != nullptr)
@@ -241,10 +242,6 @@ IRAM_ATTR void wifiUdpTaskRecv(void *pvParameters)
  * 该任务持续监听 wifiPacketReceive 队列，接收来自无线模块的数据包。
  * 接收到数据包后，它会验证数据的校验和以确保数据的完整性。
  * 如果数据有效，它会将数据复制到 CRTPPacket 结构体，并将原始数据包发送到 crtpPacketDelivery 队列以供进一步处理。
- *
- * @param pvParameters 任务参数，未在此函数中使用。
- *
- * @note 该函数使用 IRAM_ATTR 属性，表明它应该存储在 IRAM 中，以便在中断上下文中快速访问。
  */
 IRAM_ATTR void wifiLinkTask(void *pvParameters)
 {
@@ -258,7 +255,7 @@ IRAM_ATTR void wifiLinkTask(void *pvParameters)
     {
       // 验证数据是否有效
       auto cksum = rp.data[sizeof(rp.data) - 1];
-      if (cksum != calculate_cksum(rp.data, sizeof(rp.data)))
+      if (cksum != calculate_cksum(rp.data, sizeof(rp.data) - 1))
       {
         ESP_LOGE(TAG, "CRC ERROR");
         continue;
