@@ -1,0 +1,5 @@
+{
+  "name": "motor",
+  "expo": ["include/*"],
+  "headers": ["motor.h"]
+}

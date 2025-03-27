@@ -1,0 +1,5 @@
+{
+  "name": "radio",
+  "expo": ["include/*"],
+  "headers": ["radio.h"]
+}

@@ -5,10 +5,9 @@
  * Copyright (c) <abchiyi>
  */
 
-#include "common.h"
-
 #include "wifiLink.h"
-#include <crtp.h>
+#include "common.h"
+#include "radio.h"
 
 #include <esp_log.h>
 #include <esp_err.h>
@@ -25,7 +24,7 @@
 // rtos
 #include "freertos/queue.h"
 
-#define TAG "Radio"
+#define TAG "wifiLink"
 
 #define PORT 8080                        // UDP 监听端口
 #define STOREG_NAME_SPACE "RADIO_CONFIG" // 储存命名空间
@@ -75,6 +74,7 @@ IRAM_ATTR inline int wifiLinkPacketSend(CRTPPacket *pk)
   static radio_packet_t rp = {};
   memset(&rp, 0, sizeof(rp));
   memcpy(rp.data, pk->raw, sizeof(pk->raw));
+
   rp.data[sizeof(rp.data) - 1] = calculate_cksum(rp.data, sizeof(rp.data) - 1);
 
   // ESP_NOW
@@ -98,6 +98,11 @@ bool isWiFiLinkConnected(void)
 {
   return wifiReceiveInterval <= TIME_OUT_WiFi_RX_PACKET;
 }
+
+struct crtpLinkOperations *WiFiGetLink()
+{
+  return &wifiLinkInstance;
+}
 /*-----------------------------------------------------------------*/
 
 static uint8_t calculate_cksum(void *data, size_t len)
@@ -107,6 +112,12 @@ static uint8_t calculate_cksum(void *data, size_t len)
   for (int i = 0; i < len; i++)
     cksum += *(c++);
   return cksum;
+}
+
+bool identifyRadioPacket(radio_packet_t *rp)
+{
+  auto cksum = calculate_cksum(rp->data, sizeof(rp->data));
+  return rp->checksum == cksum;
 }
 
 int setWiFiLinkEnable(bool enable)
@@ -154,24 +165,37 @@ uint8_t find_clear_channel()
  * @brief 根据 mac 地址配对到指定的设备
  * @param macaddr 数组 mac地址
  */
-bool add_peer(mac_t macaddr)
+bool add_peer(const uint8_t *macaddr)
 {
   auto ifidx = (WIFI_MODE == WIFI_AP_STA)
                    ? WIFI_IF_AP
                    : WIFI_IF_STA;
 
-  esp_now_peer_info_t peer_info = {
-      .channel = 0,     // 0 = 当前WiFi所在频道
-      .ifidx = ifidx,   // 要使用的接口
-      .encrypt = false, // 不加密
-  };
-  memcpy(peer_info.peer_addr, macaddr.data(), ESP_NOW_ETH_ALEN);
+  if (!peer_info)
+  {
+    peer_info = (esp_now_peer_info_t *)malloc(sizeof(esp_now_peer_info_t));
+    if (!peer_info)
+    {
+      ESP_LOGE(TAG, "Failed to allocate memory for peer_info");
+      return false;
+    }
+  }
+  else
+    memset(peer_info, 0, sizeof(esp_now_peer_info_t));
 
-  esp_err_t ret = esp_now_add_peer(&peer_info);
+  peer_info->channel = WiFi.channel();
+  peer_info->encrypt = false;
+  peer_info->ifidx = ifidx;
+
+  memcpy(peer_info->peer_addr, macaddr, ESP_NOW_ETH_ALEN);
+
+  esp_err_t ret = esp_now_add_peer(peer_info);
 
   if (ret != ESP_OK)
   {
     ESP_LOGE(TAG, "Pair fail, error code: %s", esp_err_to_name(ret));
+    free(peer_info);
+    peer_info = nullptr;
     return false;
   }
   ESP_LOGI(TAG, "Pair success,mac :" MACSTR "", MAC2STR(macaddr));
@@ -210,13 +234,17 @@ IRAM_ATTR inline void onSend(const uint8_t *mac_addr, esp_now_send_status_t stat
 // ESP-NOW 接收回调
 IRAM_ATTR inline void onRecv(const uint8_t *mac, const uint8_t *incomingData, int len)
 {
-  static radio_packet_t radio_data_recv; // 接收数据缓存
-  if (len > sizeof(radio_packet_t))      // 避免缓冲区溢出
+  // 接收的数据长度需大于等于 radio_packet_t 的长度,以避免越界访问内存
+  if (len < sizeof(radio_packet_t))
     return;
-  memcpy(&radio_data_recv, incomingData, len);
 
-  // 避免阻塞WiFi任务，等待时间0
-  xQueueSend(wifiPacketReceive, &radio_data_recv, 0);
+  // 当对等对象未初始化时，在第一次收到数据包进行分配内存并设置为数据源主机
+  if (!peer_info && identifyRadioPacket((radio_packet_t *)incomingData))
+    add_peer(mac);
+
+  // 过滤非来自目标主机的数据包
+  if (peer_info && !memcmp(peer_info->peer_addr, mac, ESP_NOW_ETH_ALEN))
+    xQueueSend(wifiPacketReceive, incomingData, len);
 }
 
 // WiFi UDP 接收任务
@@ -247,6 +275,7 @@ IRAM_ATTR void wifiUdpTaskRecv(void *pvParameters)
   }
 }
 
+#include "ESP32Servo.h"
 /**
  * @brief 接收校验数据是否有效，有效则发布到队列
  *
@@ -259,6 +288,17 @@ IRAM_ATTR void wifiLinkTask(void *pvParameters)
   static radio_packet_t rp = {};
   static CRTPPacket crtp = {};
   auto xMutex = xSemaphoreCreateMutex();
+  Servo servo;
+  ESP32PWM::allocateTimer(0);
+  ESP32PWM::allocateTimer(1);
+  ESP32PWM::allocateTimer(2);
+  ESP32PWM::allocateTimer(3);
+
+  pinMode(4, OUTPUT);
+  servo.setPeriodHertz(50);
+  servo.attach(4, 1000, 2000);
+  servo.write(0);
+
   while (true)
   {
     memset(&rp, 0, sizeof(radio_packet_t));
@@ -277,14 +317,14 @@ IRAM_ATTR void wifiLinkTask(void *pvParameters)
       lastRecvTime = currentTime;
 
       // TODO 如果数据来自 esp-now 则不校验
-      // 验证数据是否有效
-      auto cksum = rp.data[sizeof(rp.data) - 1];
-      if (cksum != calculate_cksum(rp.data, sizeof(rp.data) - 1))
-      {
-        ESP_LOGE(TAG, "CRC ERROR");
+
+      if (!identifyRadioPacket(&rp))
         continue;
-      }
+
       memcpy(&crtp, rp.data, sizeof(crtp.raw));
+      auto PITCH = *(float *)crtp.data + 4;
+      auto ang = PITCH + 90;
+      servo.write(ang);
       xQueueSend(crtpPacketDelivery, &rp, pdMS_TO_TICKS(5));
     }
   }
