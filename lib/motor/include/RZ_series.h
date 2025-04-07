@@ -2,20 +2,21 @@
 #define RZ_series_h
 
 #include "Arduino.h"
+#include "motor.h"
 
-none
-
-    class RZ_HBridgeDriver
+class RZ_HBridgeDriver : public motor
 {
 private:
-    /* data */
-public:
-    RZ_HBridgeDriver();
-    // ~RZ_series();
-};
+    uint8_t pin_forward, pin_backward;
 
-RZ_HBridgeDriver::RZ_HBridgeDriver()
-{
-}
+public:
+    RZ_HBridgeDriver(uint8_t fi, uint8_t bi);
+    // ~RZ_series();
+
+    void forward(uint8_t) override;
+    void backward(uint8_t) override;
+    void stop(uint8_t) override;
+    void free() override;
+};
 
 #endif
