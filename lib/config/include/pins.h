@@ -10,7 +10,7 @@
 #define PIN_LIGHT_TL 5  // 左转向灯
 #define PIN_LIGHT_BR 6  // 刹车灯
 #define PIN_LIGHT_RE 7  // 倒车灯
-#define PIN_LGIHT_HE 19 // 大灯
+#define PIN_LIGHT_HE 19 // 大灯
 
 // ADC
 #define PIN_ADC_BAT 3 // 电池电压ADC

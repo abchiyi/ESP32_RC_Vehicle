@@ -7,7 +7,6 @@
 
 #include "wifiLink.h"
 #include "common.h"
-#include "radio.h"
 
 #include <esp_log.h>
 #include <esp_err.h>
@@ -39,54 +38,53 @@ static xQueueHandle crtpPacketDelivery = nullptr; // crtp 发送队列
 static xQueueHandle wifiPacketReceive = nullptr;  // wifi 接收队列
 static volatile TickType_t wifiReceiveInterval;   // WiFi 接收间隔
 
-int setWiFiLinkEnable(bool enable);
-int wifiLinkPacketSend(CRTPPacket *pk);
-int wifiLinkPacketRecv(CRTPPacket *pk);
+esp_err_t setWiFiLinkEnable();
+esp_err_t wifiLinkPacketSend(radio_packet_t *pk);
+int wifiLinkPacketRecv(radio_packet_t *pk);
 bool isWiFiLinkConnected(void);
 static uint8_t calculate_cksum(void *data, size_t len);
 int resetWiFiLink(void);
 
 WiFiUDP udp;
 
-static struct crtpLinkOperations wifiLinkInstance = {
-    .setEnable = setWiFiLinkEnable,
-    .sendPacket = wifiLinkPacketSend,
-    .receivePacket = wifiLinkPacketRecv,
-    .isConnected = isWiFiLinkConnected,
+static radio_link_operation_t wifiLinkInstance = {
+    .recv = wifiLinkPacketRecv,
+    .send = wifiLinkPacketSend,
+    .is_connected = isWiFiLinkConnected,
+    .start = setWiFiLinkEnable,
     // .reset = resetWiFiLink,
 };
 
-IRAM_ATTR inline int wifiLinkPacketRecv(CRTPPacket *pk)
+IRAM_ATTR inline int wifiLinkPacketRecv(radio_packet_t *rp)
 {
   if (wifiPacketReceive == nullptr)
     return -1;
 
-  if (xQueueReceive(wifiPacketReceive, pk, 0) == pdTRUE)
+  if (xQueueReceive(wifiPacketReceive, rp, portMAX_DELAY) == pdTRUE)
     return 0;
   else
     return -1;
 }
 
 // TODO 未完成的函数
-IRAM_ATTR inline int wifiLinkPacketSend(CRTPPacket *pk)
+IRAM_ATTR inline int wifiLinkPacketSend(radio_packet_t *rp)
 {
-  // 设置待发送数据
-  static radio_packet_t rp = {};
-  memset(&rp, 0, sizeof(rp));
-  memcpy(rp.data, pk->raw, sizeof(pk->raw));
 
-  rp.data[sizeof(rp.data) - 1] = calculate_cksum(rp.data, sizeof(rp.data) - 1);
+  rp->checksum = calculate_cksum(rp->data, sizeof(rp->data) - 1);
 
   // ESP_NOW
   if (peer_info != nullptr)
   {
     auto ret = esp_now_send(peer_info->peer_addr, (uint8_t *)&rp, sizeof(rp));
     if (ret != ESP_OK)
+    {
       ESP_LOGE(TAG, "esp_now_send failed: %s", esp_err_to_name(ret));
+      return ESP_FAIL;
+    }
   }
   // TODO WIFI_UDP
 
-  return 0;
+  return ESP_OK;
 }
 
 /**
@@ -99,7 +97,7 @@ bool isWiFiLinkConnected(void)
   return wifiReceiveInterval <= TIME_OUT_WiFi_RX_PACKET;
 }
 
-struct crtpLinkOperations *WiFiGetLink()
+radio_link_operation_t *WiFiGetLink()
 {
   return &wifiLinkInstance;
 }
@@ -118,11 +116,6 @@ bool identifyRadioPacket(radio_packet_t *rp)
 {
   auto cksum = calculate_cksum(rp->data, sizeof(rp->data));
   return rp->checksum == cksum;
-}
-
-int setWiFiLinkEnable(bool enable)
-{
-  return 0;
 }
 
 // 检查mac是否有效
@@ -286,18 +279,7 @@ IRAM_ATTR void wifiUdpTaskRecv(void *pvParameters)
 IRAM_ATTR void wifiLinkTask(void *pvParameters)
 {
   static radio_packet_t rp = {};
-  static CRTPPacket crtp = {};
   auto xMutex = xSemaphoreCreateMutex();
-  Servo servo;
-  ESP32PWM::allocateTimer(0);
-  ESP32PWM::allocateTimer(1);
-  ESP32PWM::allocateTimer(2);
-  ESP32PWM::allocateTimer(3);
-
-  pinMode(4, OUTPUT);
-  servo.setPeriodHertz(50);
-  servo.attach(4, 1000, 2000);
-  servo.write(0);
 
   while (true)
   {
@@ -321,10 +303,6 @@ IRAM_ATTR void wifiLinkTask(void *pvParameters)
       if (!identifyRadioPacket(&rp))
         continue;
 
-      memcpy(&crtp, rp.data, sizeof(crtp.raw));
-      auto PITCH = *(float *)crtp.data + 4;
-      auto ang = PITCH + 90;
-      servo.write(ang);
       xQueueSend(crtpPacketDelivery, &rp, pdMS_TO_TICKS(5));
     }
   }
@@ -386,4 +364,10 @@ void wifi_init()
 
   ret = xTaskCreate(wifiLinkTask, "wifiLinkTask", 4096, NULL, 10, NULL);
   assert(ret == pdPASS);
+}
+
+esp_err_t setWiFiLinkEnable()
+{
+  wifi_init();
+  return ESP_OK;
 }

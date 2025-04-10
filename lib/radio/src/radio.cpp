@@ -1,35 +1,18 @@
-#include "radio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "Arduino.h"
 #include "esp_err.h"
 #include "esp_log.h"
-#include "esp_wifi.h"
-
-#include "esp_attr.h"
+#include "radio.h"
 
 #define TAG "Radio"
 
-static radio_link_operation_t noLink{
-    .recv = [](radio_packet_t *rp)
-    { return ESP_FAIL; },
-
-    .send = [](radio_packet_t *rp)
-    { return ESP_FAIL; },
-
-    .is_connected = []()
-    { return false; },
-
-    .start = []()
-    { return ESP_FAIL; },
-
-    .rest = []()
-    { return ESP_FAIL; },
-};
-
-static radio_link_operation_t *RLOP = &noLink;
+static radio_link_operation_t *RLOP = nullptr;
 
 static QueueHandle_t Q_SEND_PACK = xQueueCreate(10, sizeof(radio_packet_t));
 CRTPPacketHandler_fn_t CRTPPacketHandler[16] = {nullptr}; // CRTP Packet Handler
 
-IRAM_ATTR void task_radio_recv(void *pvParameters)
+IRAM_ATTR void handle_packet(void *pvParameters)
 {
     static radio_packet_t rp;
 
@@ -56,24 +39,28 @@ IRAM_ATTR void task_radio_send(void *pvParameters)
 
 void init_radio(radio_link_operation_t *link)
 {
+    ESP_LOGI(TAG, "Init radio");
     esp_err_t ret;
 
     if (link == nullptr)
         esp_system_abort("link is null");
-
     RLOP = link;
+    RLOP->start();
 
-    ret = xTaskCreate(task_radio_recv, "radio_recv", 4096, NULL, 10, NULL);
-    ESP_ERROR_CHECK(ret);
+    ESP_LOGI(TAG, "Init task 1");
+    ret = xTaskCreate(handle_packet, "handle_packet", 2048, NULL, 10, NULL);
+    ESP_ERROR_CHECK(ret == pdPASS ? ESP_OK : ESP_FAIL);
 
-    ret = xTaskCreate(task_radio_send, "radio_send", 4096, NULL, 10, NULL);
-    ESP_ERROR_CHECK(ret);
+    ESP_LOGE(TAG, "Init task 2");
+    ret = xTaskCreate(task_radio_send, "radio_send", 2048, NULL, 10, NULL);
+    ESP_ERROR_CHECK(ret == pdPASS ? ESP_OK : ESP_FAIL);
 
     ESP_LOGI(TAG, "Radio init done :)");
 }
 
 bool radio_link_is_connected()
 {
+    ESP_LOGI(TAG, "Radio link is connected: %d", RLOP->is_connected());
     return RLOP->is_connected();
 }
 

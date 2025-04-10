@@ -12,23 +12,23 @@ RZ_HBridgeDriver::RZ_HBridgeDriver(uint8_t fi, uint8_t bi)
 void RZ_HBridgeDriver::forward(uint8_t speed)
 {
     analogWrite(pin_forward, speed);
-    digitalWrite(pin_backward, LOW);
+    analogWrite(pin_backward, 0);
 }
 
 void RZ_HBridgeDriver::backward(uint8_t speed)
 {
     analogWrite(pin_backward, speed);
-    digitalWrite(pin_forward, LOW);
+    analogWrite(pin_forward, 0);
 }
 
-void RZ_HBridgeDriver::stop(uint8_t speed)
+void RZ_HBridgeDriver::stop()
 {
-    digitalWrite(pin_forward, HIGH);
-    digitalWrite(pin_backward, HIGH);
+    analogWrite(pin_forward, 255);
+    analogWrite(pin_backward, 255);
 }
 
 void RZ_HBridgeDriver::free()
 {
-    digitalWrite(pin_forward, LOW);
-    digitalWrite(pin_backward, LOW);
+    analogWrite(pin_forward, 0);
+    analogWrite(pin_backward, 0);
 }

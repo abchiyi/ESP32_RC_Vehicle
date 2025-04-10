@@ -15,7 +15,7 @@ public:
 
     void forward(uint8_t) override;
     void backward(uint8_t) override;
-    void stop(uint8_t) override;
+    void stop() override;
     void free() override;
 };
 

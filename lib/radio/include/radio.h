@@ -16,7 +16,7 @@ typedef struct
             uint8_t data[sizeof(CRTPPacket::raw)];
             uint8_t checksum;
         };
-        uint8_t raw[32];
+        uint8_t raw[sizeof(data) + 1]; // +1 for checksum
     };
 } __attribute__((packed)) radio_packet_t;
 
@@ -30,5 +30,11 @@ typedef struct
 } radio_link_operation_t;
 
 typedef std::function<void(CRTPPacket *)> CRTPPacketHandler_fn_t;
+
+esp_err_t radio_set_port_callback(CRTPPort port, CRTPPacketHandler_fn_t fn);
+
+bool radio_link_is_connected();
+
+void init_radio(radio_link_operation_t *link);
 
 #endif
